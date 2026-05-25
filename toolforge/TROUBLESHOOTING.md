@@ -331,6 +331,112 @@ one file stat plus one SQLite read (milliseconds). If you are hitting timeouts:
 **Why it's set up this way:** Conservative timeouts protect the user's
 interactive responsiveness. Loosening them invites worse hangs.
 
+### `/toolforge UI` does not show my installed plugins
+
+**Cause:** `bin/toolforge_local_scan.py` shells out to `claude plugin list` and
+`claude mcp list` to populate the installed-tools branch of the local-source
+scan. Either the subprocess timed out (the per-call cap is
+`CLAUDE_LIST_TIMEOUT_SECONDS = 5`), or the CLI returned no rows because it had
+not finished warming up yet (cold start on Windows under antivirus inspection
+can blow past 5 seconds on the first invocation of a session).
+
+**Fix:**
+1. Wait for `claude` to finish warming up (run `claude plugin list` once in a
+   shell and confirm it returns), then run `/toolforge-rescan` to drop the
+   stale 5-minute cache.
+2. If the timeout is the real bottleneck on your machine, edit
+   `CLAUDE_LIST_TIMEOUT_SECONDS` near the top of
+   `bin/toolforge_local_scan.py` upward (10 to 15 seconds is reasonable for a
+   slow Windows box). Re-run `/toolforge-rescan` after editing.
+3. Confirm via `python toolforge/bin/toolforge_local_scan.py ui | python -m json.tool`
+   that the `installed=True` entries appear in raw scanner output. If they
+   appear there but not in `/toolforge UI`, the issue is downstream in the
+   curator skill, not the scanner.
+
+**Why it's set up this way:** A short subprocess timeout keeps the local-scan
+budget bounded so a hung `claude` invocation cannot freeze the whole curator
+pipeline. The trade is that genuinely slow `claude` cold starts will miss the
+window once. See [ARCHITECTURE.md](./ARCHITECTURE.md) section 4.5 for the full
+list of scanner caps.
+
+### `/toolforge UI` shows tools from a repo I deleted
+
+**Cause:** Local-scan results are cached at
+`tempdir/toolforge_local_scan_<category>.json` for 5 minutes. If you deleted a
+repo from `~/.claude/skills/`, removed a path from the `local_paths` array in
+`~/.claude/toolforge-config.json`, or uninstalled a plugin via
+`claude plugin uninstall`, the cache still references the prior state until it
+expires.
+
+**Fix:**
+1. Run `/toolforge-rescan`. The slash command unlinks all five per-category
+   cache files in a single sweep.
+2. Or wait up to 5 minutes; the cache file's mtime gates expiry, so the next
+   `/toolforge <category>` after the TTL elapses will rebuild from disk.
+3. Verify the rebuild picked up the change with
+   `python toolforge/bin/toolforge_local_scan.py <category> | python -m json.tool`.
+
+**Why it's set up this way:** A 5-minute TTL is long enough to avoid
+back-to-back filesystem walks in the same session, short enough that stale
+entries do not linger across normal work patterns. `/toolforge-rescan` is the
+escape hatch for when you need a forced refresh.
+
+### Local-scan returns nothing for a category despite having relevant tools locally
+
+**Cause:** The categorization heuristic in `bin/toolforge_local_scan.py` did
+not find enough keyword matches in the tool's `name + description` to clear
+the drop threshold of `0.3`. The scanner uses a fixed per-category keyword set
+(`CATEGORY_KEYWORDS`); a skill named `helper-x` with description `"general
+utility"` will not match any category.
+
+**Fix:**
+1. Inspect the raw scan to confirm the entry is being read at all:
+   `python toolforge/bin/toolforge_local_scan.py <category> | python -m json.tool`.
+   If the entry is absent entirely, the issue is depth, file count, or symlink
+   walk, not categorization.
+2. Either edit `CATEGORY_KEYWORDS` in the scanner to add the keyword you
+   expect (e.g., add `"helper"` to the relevant set), then run
+   `/toolforge-rescan`. The keyword sets are documented verbatim in
+   [ARCHITECTURE.md](./ARCHITECTURE.md) section 4.3.
+3. Or rename the local SKILL.md to include a category-matching keyword in its
+   `name` field or first description line. The scanner reads up to 4 KiB; the
+   keyword needs to land in that window.
+
+**Why it's set up this way:** A keyword heuristic with a hard drop threshold
+is cheap, predictable, and easy to debug. ML-based categorization would mask
+this exact class of problem behind learned weights.
+
+### `~/.claude/toolforge-config.json` is unreadable
+
+**Cause:** Either the file is missing, contains invalid JSON, or lacks the
+expected top-level `local_paths` array. The scanner refuses to guess at the
+contents of a malformed config rather than silently substituting one value for
+another.
+
+**Fix:**
+1. Validate the JSON: `python -m json.tool ~/.claude/toolforge-config.json`.
+   The first parse error pinpoints the offending line.
+2. Confirm the shape matches:
+   ```json
+   {
+     "local_paths": [
+       "/absolute/path/one",
+       "/absolute/path/two"
+     ]
+   }
+   ```
+3. If you want to disable user-configured local paths entirely, delete the
+   file; the scanner falls back to the default scan roots
+   (`~/.claude/skills`, `~/.claude/agents`, `<cwd>/.claude/*`,
+   `claude plugin list`, `claude mcp list`) and prints a one-line stderr
+   warning naming the missing or unreadable config file.
+
+**Why it's set up this way:** Silent fallback to defaults plus a stderr
+warning is the right default for an optional config file: the plugin keeps
+working, and the user sees the warning when they run `/toolforge` next.
+Refusing to start would be worse. See
+[CONTRIBUTING.md](./CONTRIBUTING.md) if you want to extend the config schema.
+
 ### `toolforge_install.py` exits 3 (`audit log dropped after success`)
 
 **Cause:** The install command itself succeeded (subprocess exit 0), but the

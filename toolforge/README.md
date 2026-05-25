@@ -17,6 +17,9 @@ Close: "Watch the rating change the ranking."
 +--------------------+        +------------+------------+
                                            |
                        WebSearch + WebFetch | URL allow-list gate
+                                           |
+                          local-scan (~/.claude, project .claude,
+                          configured local_paths, claude plugin/mcp list)
                                            v
                               +------------+------------+
                               |  SQLite-backed ranking  |
@@ -47,7 +50,7 @@ claude plugin marketplace add ./toolforge
 claude plugin install toolforge@local-toolforge
 ```
 
-That is it. The plugin auto-registers 3 slash commands, 1 skill, and 2 hooks. No external Python dependencies (stdlib only).
+That is it. The plugin auto-registers 4 slash commands, 1 skill, and 2 hooks. No external Python dependencies (stdlib only).
 
 ## What it looks like
 
@@ -72,13 +75,14 @@ Last 5 ratings:
 
 ## Commands
 
-ToolForge ships 3 slash commands:
+ToolForge ships 4 slash commands:
 
 | Command | Purpose |
 |---|---|
 | `/toolforge <category>` | Discover and install top 5 tools for the category. Valid: UI, backend, database, testing, devops. |
 | `/toolforge-status` | Show install count, top 5 rated tools, last 5 ratings. |
 | `/toolforge-rate <1-5>` | Rate the most recently installed tool on a Likert scale. |
+| `/toolforge-rescan` | Clear the 5-minute local-scan cache so the next `/toolforge` invocation rebuilds the local source index from disk. |
 
 ## How live discovery works
 
@@ -95,6 +99,34 @@ When you run `/toolforge UI`, the `toolforge-curator` skill is invoked. It:
 Note on `claude mcp add`: the CLI requires a `--` separator between its own flags and the wrapped install command (for example `claude mcp add foo -- npx -y some-pkg`). The curator and the offline fallback entries both write the `--` separator explicitly so the install line works as-is when you paste it.
 
 If the live pipeline returns fewer than 5 valid candidates or anything takes longer than 10 seconds, ToolForge falls back to a hand-curated offline cache in `fallback/<category>.json` (5 known good entries per category). The demo still runs with the network cable unplugged.
+
+## Local sources
+
+Live discovery is half the picture. The other half is what is already on your machine. In parallel with `WebSearch`, the curator skill runs `bin/toolforge_local_scan.py`, which produces a ranked list of locally-available candidates per category and folds them into the same bulk DB lookup and composite scoring as live entries.
+
+What it scans, in order:
+
+1. `claude plugin list` and `claude mcp list`: already-installed plugins and MCP servers. These get an `[installed]` badge in the output and a `+0.10` visibility bonus in the composite score so you see what you already have before being asked to install something new.
+2. `~/.claude/skills/` and `~/.claude/agents/`: user-wide skills and agents.
+3. `<cwd>/.claude/skills/` and `<cwd>/.claude/agents/`: project-scoped skills and agents.
+4. Any absolute paths listed in the `local_paths` array of `~/.claude/toolforge-config.json`. This is the opt-in slot for reference repositories, internal shared catalogs, or a hand-built skill garden. The plugin ships no defaults for this list. The intent is that ToolForge is not a hardcoded catalog; users opt in to local repos by editing this file.
+
+Per-entry schema for local candidates: `name`, `type`, `source`, `path`, `installed`, `description`, `category_score`, `stars_norm` (fixed at 0.4 for local entries since star counts do not apply), `recency_norm` (exponential decay from `git log -1 --format=%ct` when the source is a git repo, otherwise file mtime), and `category`. Categorization is keyword-based with per-category keyword sets, a drop threshold of 0.3, and a cap of 10 entries per category. See `ARCHITECTURE.md` for the verbatim keyword lists and the security caps that bound the scan.
+
+Results are cached at `tempdir/toolforge_local_scan_<category>.json` for 5 minutes. To force a refresh (after installing a new plugin, deleting a local skill, or editing `local_paths`), run `/toolforge-rescan`.
+
+Sample `~/.claude/toolforge-config.json`:
+
+```json
+{
+  "local_paths": [
+    "/home/me/code/internal-skills",
+    "/home/me/code/reference-repos/awesome-claude-skills"
+  ]
+}
+```
+
+If the config file is missing, malformed, or unreadable, the scanner falls back to defaults silently and prints a one-line stderr warning. The `local_paths` entries are canonicalized before scanning; path-escape attempts via `..` or symlinks are dropped, not followed.
 
 ## How the Likert learning loop works
 

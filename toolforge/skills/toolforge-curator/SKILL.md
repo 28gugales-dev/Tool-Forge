@@ -1,7 +1,7 @@
 ---
 name: toolforge-curator
-description: Activate this skill ONLY when the user runs `/toolforge <category>` or explicitly asks to "discover", "find", "install new", or "rank" Claude Code plugins / MCP servers / skills for a specific domain (UI, backend, database, testing, devops). Performs live web discovery via WebSearch + WebFetch (allow-list locked to 7 hosts: github.com, raw.githubusercontent.com, claudemarketplaces.com, modelcontextprotocol.io, aitmpl.com, npmjs.com, www.npmjs.com), enforces the allow-list with bin/toolforge_validate_url.py, applies a Bayesian-shrunk composite ranking blending stars, recency, and historical Likert ratings from SQLite, and returns the top 5 with install commands. Skip this skill for general questions about installed tools, configuration changes, or read-only inspection. Only fire on explicit discovery requests.
-version: 0.2.0
+description: Activate this skill ONLY when the user runs `/toolforge <category>` or explicitly asks to "discover", "find", "install new", or "rank" Claude Code plugins / MCP servers / skills for a specific domain (UI, backend, database, testing, devops). Performs live web discovery via WebSearch + WebFetch (allow-list locked to 7 hosts: github.com, raw.githubusercontent.com, claudemarketplaces.com, modelcontextprotocol.io, aitmpl.com, npmjs.com, www.npmjs.com), enforces the allow-list with bin/toolforge_validate_url.py, applies a Bayesian-shrunk composite ranking blending stars, recency, and historical Likert ratings from SQLite, and returns the top 5 with install commands. Skip this skill for general questions about installed tools, configuration changes, or read-only inspection. Only fire on explicit discovery requests. Now also surfaces locally-installed plugins/MCPs and user-configured local reference repos (via `~/.claude/toolforge-config.json`) alongside live web results, with an `[installed]` badge for already-installed entries.
+version: 0.3.0
 ---
 
 # ToolForge Curator
@@ -25,9 +25,38 @@ Run TWO `WebSearch` queries in parallel:
 
 Collect every distinct URL across both result sets.
 
+### 1b. Local-source scan (parallel with web search)
+
+In the SAME parallel batch as the WebSearch calls above (single tool-use block, no serial wait), shell out:
+
+```
+python "${CLAUDE_PLUGIN_ROOT}/bin/toolforge_local_scan.py" scan <category>
+```
+
+Returns a JSON array. Each entry has locked schema:
+
+```
+{
+  "name": "<kebab-case>",
+  "type": "skill|plugin|mcp|agent",
+  "source": "installed-plugin|installed-mcp|user-skills|user-agents|project-skills|project-agents|local-repo:<absolute-path>",
+  "path": "<absolute-path-or-null>",
+  "installed": true|false,
+  "description": "<one line, max 200 chars>",
+  "category_score": 0.0-1.0,
+  "stars_norm": 0.4,
+  "recency_norm": 0.0-1.0,
+  "category": "ui|backend|database|testing|devops"
+}
+```
+
+Local scan results are cached for 5 minutes, so the first call in a session pays the full scan cost (still within the 10s wall-clock budget when run in parallel with WebSearch) and subsequent calls cost roughly 0.1s. Use `--force` to bypass the cache. Use `rescan-all` to clear every category's cache.
+
+Trust boundary: the local scanner is a separate trust domain from the web allow-list. Local files are presumed user-trusted (the user put them there). No URL validation runs on local paths. Do NOT pass local `path` values through `toolforge_validate_url.py`, that validator is only for HTTP(S) URLs.
+
 ### 2. Validate every URL against the allow-list (HARD GATE)
 
-For every candidate URL, shell out:
+For every candidate URL (web only, local-scan entries skip this step), shell out:
 
 ```
 python "${CLAUDE_PLUGIN_ROOT}/bin/toolforge_validate_url.py" "<url>"
@@ -75,6 +104,8 @@ Reject candidates missing a real install command. Reject duplicates (case-insens
 
 ONE call, not five. Subprocess cold-start on Windows is ~150ms per invocation; five sequential calls blows the 10-second budget.
 
+Build the name list from BOTH sources: every web-parsed candidate name AND every local-scan entry name. Local entries get ratings too (a user can rate `gsap-react` just like `shadcn-ui-mcp`).
+
 ```
 python "${CLAUDE_PLUGIN_ROOT}/bin/toolforge_db.py" get_rating_stats_bulk <name1> <name2> ...
 ```
@@ -83,7 +114,9 @@ Returns JSON: `{"<name>": {"sum": int, "n": int, "avg": float|null, "decayed_avg
 
 ### 6. Compute composite score (with Bayesian shrinkage)
 
-For each candidate, normalize signals to 0..1:
+Two formulas, branched on entry origin. Bayesian Likert shrinkage is identical in both.
+
+**Web entries** (from WebFetch parsing):
 
 - `stars_norm = min(1.0, log1p(stars) / log1p(50000))` (log scale so 90k-star and 5k-star repos don't both pin to 1.0; clamped so extreme outliers cap at 1.0)
 - `recency_norm = exp(-days_since_last_commit / 180.0)` (smooth exponential, never zero, no cliff at day 366)
@@ -92,7 +125,16 @@ For each candidate, normalize signals to 0..1:
   - Else: `posterior = (decayed_avg * n + 3.0 * 5) / (n + 5)`, `likert_norm = posterior / 5.0`
 - `score = stars_norm * 0.3 + recency_norm * 0.3 + likert_norm * 0.4`
 
-Worked numbers:
+**Local entries** (from `toolforge_local_scan.py`):
+
+- `stars_norm`: fixed at 0.4 (already in scanner output, do NOT recompute, do NOT apply log formula).
+- `recency_norm`: read directly from scanner output (exp-decay already applied, do NOT re-decay).
+- `likert_norm`: same Bayesian-shrinkage formula as web (prior mean 3.0, weight 5).
+- `score = stars_norm * 0.3 + recency_norm * 0.3 + likert_norm * 0.4` (same weights).
+
+**Installed bonus**: any entry with `installed == true` gets a `+0.10` flat bonus added to its final composite score. Rationale: the user already has it on their machine, surfacing it slightly above an unrated web result is a visibility win (zero install friction, known-good).
+
+Worked numbers (Bayesian Likert, applies to both branches):
 - n=0 unrated:                          likert_norm = 0.60
 - n=1 rated 1:  posterior = (1+15)/6 = 2.67  → 0.53
 - n=3 all 5:    posterior = (15+15)/8 = 3.75 → 0.75
@@ -102,12 +144,14 @@ Unrated tools rank cleanly between "actively disliked" and "moderately liked" in
 
 ### 7. Fallback path
 
+Local-scan results count toward the "valid candidates" total. If web returns 0 valid candidates but the local scan returns 4 and partial-merge tops up 1 from `fallback/{category}.json`, that totals 5 valid and FULL fallback does NOT fire.
+
 Trigger conditions:
 
-- ZERO valid candidates after parsing → FULL fallback (load `fallback/{category}.json`).
-- WebSearch or WebFetch fails entirely → FULL fallback.
+- ZERO valid candidates (web + local combined) after parsing → FULL fallback (load `fallback/{category}.json`).
+- WebSearch or WebFetch fails entirely AND local scan returns 0 → FULL fallback.
 - Total wall clock exceeds 10 seconds → FULL fallback.
-- 1 to 4 valid candidates → PARTIAL MERGE: keep all live candidates, top up with the highest-scored entries from `fallback/{category}.json` (de-duped by lowercase name) until you have 5. This preserves real fresh signal instead of discarding it.
+- 1 to 4 combined valid candidates (web + local) → PARTIAL MERGE: keep all live + local candidates, top up with the highest-scored entries from `fallback/{category}.json` (de-duped by lowercase name) until you have 5. This preserves real fresh signal instead of discarding it.
 
 **Integrity check (HARD GATE, runs BEFORE any fallback JSON is loaded)**: shell out:
 
@@ -123,23 +167,39 @@ When the fallback fires (after integrity check passes):
 
 ### 8. Sort and return
 
-Sort by score descending. Return the top 5 in this exact format:
+Sort by score descending (installed bonus already applied in step 6). Return the top 5 in this exact format, with per-entry line variants based on origin:
+
+**Web entry** (unchanged):
 
 ```
-Top 5 tools for {category}:
-
-1. <name> (score: X.XX)
+N. <name> (score: X.XX)
    <description>
    Source: <source_url>
    Install: <install_command>
-
-2. <name> (score: X.XX)
-   ...
 ```
+
+**Installed entry** (any entry with `installed == true`, regardless of source):
+
+```
+N. <name> [installed] (score: X.XX)
+   <description>
+   [installed]  Already on this machine, no action needed.
+```
+
+**Non-installed local entry** (`source` starts with `local-repo:` and `installed == false`):
+
+```
+N. <name> (score: X.XX)
+   <description>
+   Local source: <path>
+   Install: <install_command>
+```
+
+**Source diversity rule**: when assembling the final top 5, if any installed candidate scored above 0.6, at least 1 installed entry MUST appear in the returned list. If the natural sort already includes one, no action needed. If not, swap the lowest-ranked entry in the top 5 for the highest-scoring installed candidate above 0.6. This guarantees the user always sees at least one "you already have this" surface when an installed match is genuinely competitive.
 
 Keep it tight. No prose around the list.
 
-## Worked example
+## Worked example (web only)
 
 User: `/toolforge UI`
 
@@ -151,6 +211,53 @@ User: `/toolforge UI`
 6. Returns: `{"shadcn-ui-mcp": {"sum":14,"n":3,"avg":4.67,"decayed_avg":4.71}, "magic-ui":{...}, others n=0}`.
 7. Composite scores computed using log-stars, exp-recency, Bayesian Likert.
 8. Sort, return top 5.
+
+## Worked example (local + web mixed)
+
+User: `/toolforge UI`
+
+1. PARALLEL batch: two WebSearches + `toolforge_local_scan.py scan ui`.
+2. Web returns 14 URLs. Allow-list validation drops 8. WebFetch the top 5 surviving.
+3. Local scan returns 3 entries: `gsap-react` (installed-plugin, recency_norm 0.91, stars_norm 0.4), `playwright-recording` (installed-plugin, recency_norm 0.78, stars_norm 0.4), `interaction-design` (local-repo:/Users/x/repos/interaction-design, recency_norm 0.62, stars_norm 0.4).
+4. Parse 4 valid web candidates: `shadcn-ui-mcp`, `magic-mcp`, `frontend-design`, `tweakcn`.
+5. ONE bulk DB call with all 7 names: web (4) + local (3). Returns Likert stats for each, mostly n=0 except `gsap-react` (n=4, decayed_avg 4.8).
+6. Composite scoring: web entries use log-stars; local entries use fixed 0.4 stars_norm and scanner-provided recency_norm. Installed entries get `+0.10` bonus added after composite computation.
+   - `gsap-react`: 0.4*0.3 + 0.91*0.3 + 0.87*0.4 = 0.741 → +0.10 installed bonus = **0.841**
+   - `shadcn-ui-mcp`: 0.91*0.3 + 0.88*0.3 + 0.75*0.4 = 0.837 → **0.837**
+   - `magic-mcp`: 0.62*0.3 + 0.95*0.3 + 0.60*0.4 = 0.711 → **0.711**
+   - `playwright-recording`: 0.4*0.3 + 0.78*0.3 + 0.60*0.4 = 0.594 → +0.10 = **0.694**
+   - `interaction-design`: 0.4*0.3 + 0.62*0.3 + 0.60*0.4 = 0.546 → **0.546**
+   - `frontend-design`: 0.71*0.3 + 0.70*0.3 + 0.60*0.4 = 0.663 → **0.663**
+   - `tweakcn`: 0.55*0.3 + 0.74*0.3 + 0.60*0.4 = 0.627 → **0.627**
+7. Source diversity check: `gsap-react` is installed and scored 0.841 > 0.6, already at rank 1. Pass.
+8. Sort and return top 5:
+
+```
+Top 5 tools for UI:
+
+1. gsap-react [installed] (score: 0.84)
+   Official GSAP skill for React: useGSAP hook, refs, gsap.context(), cleanup.
+   [installed]  Already on this machine, no action needed.
+
+2. shadcn-ui-mcp (score: 0.84)
+   Headless component primitives via MCP. Pulls shadcn/ui registry on demand.
+   Source: https://github.com/example/shadcn-ui-mcp
+   Install: npx shadcn-ui-mcp install
+
+3. magic-mcp (score: 0.71)
+   21st.dev Magic MCP for AI-curated React components.
+   Source: https://github.com/21st-dev/magic-mcp
+   Install: npx -y @21st-dev/magic@latest
+
+4. playwright-recording [installed] (score: 0.69)
+   Browser session recording skill for visual regression tests.
+   [installed]  Already on this machine, no action needed.
+
+5. frontend-design (score: 0.66)
+   Production-grade UI component generator plugin.
+   Source: https://github.com/example/frontend-design
+   Install: claude plugin install frontend-design
+```
 
 ## Required behaviors
 

@@ -133,11 +133,90 @@ Tool names are normalized to lowercase and validated against `^[a-z0-9._@/-]{1,8
 
 Ratings stored as integers 1 to 5, enforced by both the `CHECK` constraint and the Python regex in `toolforge_rate.py`.
 
-## 4. Security boundaries
+## 4. Local-source scanner
+
+Live discovery via WebSearch + WebFetch is not the only signal the curator skill folds into its ranking. In parallel with the live discovery step (step 1b of the curator pipeline), the skill shells out to `bin/toolforge_local_scan.py <category>`, which produces a ranked list of locally-available candidates per category. The local entries are merged into the same bulk DB lookup (step 5) and the same composite scoring (step 6) as live web entries, with two differences captured below: a fixed `stars_norm = 0.4` and a `+0.10` visibility bonus when the entry is already installed.
+
+### 4.1 Scan paths
+
+In scan order:
+
+1. `claude plugin list` and `claude mcp list`: already-installed plugins and MCP servers. Entries are marked `installed=True` and receive the visibility bonus during composite scoring.
+2. `~/.claude/skills/` and `~/.claude/agents/`: user-wide skills and agents.
+3. `<cwd>/.claude/skills/` and `<cwd>/.claude/agents/`: project-scoped skills and agents.
+4. Absolute paths listed in the `local_paths` JSON array of `~/.claude/toolforge-config.json`. The plugin ships no defaults for this list. It is the per-user opt-in slot for reference repositories. Paths are resolved to their canonical form (`os.path.realpath`) before scanning, and entries that resolve outside their declared root via `..` or symlink chains are dropped, not followed.
+
+Config file format:
+
+```json
+{
+  "local_paths": [
+    "/absolute/path/one",
+    "/absolute/path/two"
+  ]
+}
+```
+
+A missing, malformed, or unreadable config file is non-fatal: the scanner falls back to the defaults (1, 2, 3 above) and prints a one-line stderr warning naming the file.
+
+### 4.2 Per-entry schema
+
+Each candidate emitted by the scanner is a JSON object with these fields:
+
+| Field           | Type    | Notes                                                                                                |
+|-----------------|---------|------------------------------------------------------------------------------------------------------|
+| `name`          | string  | Skill / agent / plugin / MCP server identifier. Lowercased, validated against the same `^[a-z0-9._@/-]{1,80}$` pattern used elsewhere. |
+| `type`          | string  | One of `plugin`, `mcp`, `skill`, `agent`.                                                            |
+| `source`        | string  | Origin label: `claude_plugin_list`, `claude_mcp_list`, `user_skills`, `user_agents`, `project_skills`, `project_agents`, `local_path`. |
+| `path`          | string  | Absolute path on disk (for skills/agents/local entries) or empty string (for `claude *_list` entries). |
+| `installed`     | boolean | True for entries surfaced by `claude plugin list` or `claude mcp list`.                              |
+| `description`   | string  | First non-empty description line from the SKILL.md / agent frontmatter / MCP manifest, capped at the 4 KiB per-file read limit. |
+| `category_score`| float   | Sum of category-keyword hits in `name + description`, normalized to `[0, 1]` against the per-category keyword count. Entries below the drop threshold (`0.3`) are discarded. |
+| `stars_norm`    | float   | Fixed at `0.4` for all local entries (star counts do not apply to local sources; `0.4` lands near the middle of the live-discovery distribution so local entries are neither artificially advantaged nor penalized). |
+| `recency_norm`  | float   | Exponential decay over 180 days, derived from `git log -1 --format=%ct <path>` when the source is a git repo (timeout 2 seconds), otherwise the file mtime. |
+| `category`      | string  | One of `ui`, `backend`, `database`, `testing`, `devops`.                                             |
+
+### 4.3 Categorization heuristic
+
+Per-category keyword sets, taken verbatim from `CATEGORY_KEYWORDS` in `bin/toolforge_local_scan.py`:
+
+```python
+CATEGORY_KEYWORDS = {
+    "ui":       {"ui", "ux", "frontend", "react", "vue", "svelte", "css", "tailwind",
+                 "component", "design", "shadcn", "animation", "layout", "figma"},
+    "backend":  {"backend", "api", "server", "node", "express", "fastapi", "django",
+                 "flask", "rest", "graphql", "auth", "middleware", "rpc"},
+    "database": {"database", "db", "sql", "postgres", "postgresql", "mysql", "sqlite",
+                 "mongo", "mongodb", "redis", "orm", "migration", "supabase", "prisma"},
+    "testing":  {"test", "testing", "tdd", "jest", "vitest", "pytest", "playwright",
+                 "cypress", "mocha", "coverage", "fixture", "assert", "mock"},
+    "devops":   {"devops", "deploy", "ci", "cd", "docker", "kubernetes", "k8s",
+                 "terraform", "ansible", "github-actions", "pipeline", "infrastructure"},
+}
+```
+
+Scoring: `category_score = (count of keyword hits in lowercased name + description) / len(CATEGORY_KEYWORDS[category])`, clamped to `[0, 1]`. The drop threshold is `0.3` and the per-category cap is `10` entries (highest `category_score` wins ties broken by `recency_norm`). Both constants are module-level in the scanner and easy to tune.
+
+### 4.4 Caching
+
+Per-category results are cached to `tempfile.gettempdir() / f"toolforge_local_scan_{category}.json"` with a 5-minute TTL. Cache hits are gated by file mtime, not embedded timestamps, so a `touch` on the cache file invalidates it. `/toolforge-rescan` unlinks all five cache files in a single sweep. The TTL is short enough that newly-installed plugins surface on the next `/toolforge` invocation without manual rescan, and long enough that back-to-back category queries in the same session do not redundantly walk the filesystem.
+
+### 4.5 Security caps
+
+Six bounds on what the scanner is allowed to do, all enforced at the script layer:
+
+1. **No symlink follow.** `os.walk(..., followlinks=False)` and every individual `open()` uses the default no-follow behaviour. Defends against symlink-bomb scans where a malicious local repo points `agents/x -> /` and causes the scanner to walk the entire filesystem.
+2. **4 KiB per-file read cap.** Each SKILL.md / agent frontmatter / manifest file is opened with `read(4096)`, never the full file. The first 4 KiB is more than enough for the description and any frontmatter; reading more would amplify the cost of a single hostile repo dropping multi-megabyte SKILL.md files.
+3. **2000 file cap.** Total files visited across all scan paths is capped at 2000 per invocation. Beyond that the scanner emits a stderr warning and stops walking.
+4. **Depth cap 4.** Directory recursion stops at depth 4 from each scan root. A category-curated repo with deeper nesting will not be fully indexed; this is the intentional trade for not unbounded-walking pathological layouts.
+5. **8-second wall-clock budget.** The scanner records `time.monotonic()` at entry and bails out of the walk loop once 8 seconds elapse. Partial results are still cached and returned with a stderr note rather than discarded.
+6. **Subprocess scope.** Only three binaries are ever invoked: `claude plugin list`, `claude mcp list`, and `git log -1 --format=%ct <path>`. All three run via `subprocess.run(shell=False, timeout=...)` with explicit per-call timeouts (`CLAUDE_LIST_TIMEOUT_SECONDS = 5`, `GIT_LOG_TIMEOUT_SECONDS = 2`). No other executable is allowed and no shell metacharacter parsing is attempted.
+
+## 5. Security boundaries
 
 Two layers, both explicit, both Python scripts (not skill-prompt logic).
 
-### 4.1 URL allow-list: `bin/toolforge_validate_url.py`
+### 5.1 URL allow-list: `bin/toolforge_validate_url.py`
 
 Every URL touched by `WebFetch`, including any URL the skill discovers by parsing a prior `WebFetch` result (README links, redirects, "see also" pointers, install instructions referencing other hosts), MUST be passed through this script. The validator is the trust boundary. Model judgement is not.
 
@@ -165,7 +244,7 @@ Validation order inside `is_allowed(url)`:
 
 CLI surface: `--list` prints the allow-list (the skill uses this to keep WebFetch `allowed_domains` in sync with the single source of truth), `--check <url>` is silent and exits 0/1 (for script callers), and a bare URL prints the canonicalized hostname on success or a refusal message on stderr with exit 1.
 
-### 4.2 Install-command argv allow-list: `bin/toolforge_install.py`
+### 5.2 Install-command argv allow-list: `bin/toolforge_install.py`
 
 The install command originates from WebFetch-summarized GitHub READMEs or other web sources that may be adversarial. The skill prompt is not a trust boundary. This script is. Validation runs in a fixed order; the first failing layer raises `ValueError` and the script exits 2 without ever calling `subprocess`.
 
@@ -216,7 +295,7 @@ if (os.sep + "node_modules" + os.sep + ".bin" + os.sep) in resolved:
 
 Execution is `subprocess.run(resolved, shell=False, capture_output=True, text=True, check=False)`. Output is streamed back to the caller's stdout/stderr after the subprocess returns. There is no PTY. Interactive prompts inside an install command will hang for the duration of the 10-second hook timeout (the SessionEnd hook has its own 10-second cap, set in `plugin.json`); installers that need a tty are explicitly out of scope.
 
-### 4.3 Rating regex: `bin/toolforge_rate.py`
+### 5.3 Rating regex: `bin/toolforge_rate.py`
 
 ```python
 RATING_RE = re.compile(r"^[1-5]$")
@@ -224,7 +303,17 @@ RATING_RE = re.compile(r"^[1-5]$")
 
 Enforced at the Python layer before any DB call. The slash command `/toolforge-rate` pre-validates the argument in its markdown body as defense in depth; the Python regex is the actual gate.
 
-## 5. Ranking algorithm
+### 5.4 Local-scan boundary: `bin/toolforge_local_scan.py`
+
+The scanner is the third trust boundary in the plugin: it reads from arbitrary user-specified filesystem paths (via `local_paths` in the config file) and shells out to `claude` and `git`. The same model-proposes-validator-disposes posture applies. Defenses, all enforced inside `toolforge_local_scan.py`:
+
+- **4 KiB per-file read cap.** Every metadata file (SKILL.md, agent frontmatter, MCP manifest) is opened with a single `fh.read(4096)`. Defends against a hostile local repo dropping multi-MiB SKILL.md files that would otherwise inflate scan time and memory.
+- **No symlink follow.** `os.walk(..., followlinks=False)` plus default-no-follow `open()`. Defends against scan-bomb attacks where a malicious local repo points `agents/x -> /` to make the scanner walk the entire filesystem. Path-escape attempts via `..` or symlink chains in `local_paths` are detected via canonicalization (`os.path.realpath`) and dropped before the walk begins, not silently followed.
+- **Subprocess limited to 3 binaries with explicit timeouts.** Only `claude plugin list`, `claude mcp list`, and `git log -1 --format=%ct <path>` are ever invoked. Each runs via `subprocess.run(shell=False, timeout=...)`. Timeouts: `CLAUDE_LIST_TIMEOUT_SECONDS = 5`, `GIT_LOG_TIMEOUT_SECONDS = 2`. No other executable is callable from this script. No shell metacharacter parsing is attempted; subprocess argv is a Python list literal.
+
+Combined with the file-count cap (2000), depth cap (4), and wall-clock budget (8 seconds) from section 4.5, the scanner has a hard upper bound on the work a single invocation can do, independent of how pathological the local filesystem layout is.
+
+## 6. Ranking algorithm
 
 Composite score blends three signals, weights `0.3 / 0.3 / 0.4`. The Bayesian-shrunk Likert term gets the largest weight because user-supplied ratings are the noisiest and the most easily exploited signal; shrinkage to a neutral 3.0 prior with weight 5 limits the leverage of any single rating.
 
@@ -261,7 +350,7 @@ The composite is computed inside the skill prompt, not in Python. Python's job i
 
 `toolforge_db.status` reuses the same Bayesian shrinkage in `_shrunk_score` so the CLI status output ranks the top 5 the same way the curator does.
 
-## 6. Hook plumbing
+## 7. Hook plumbing
 
 Two hooks, configured in `.claude-plugin/plugin.json`:
 
@@ -276,7 +365,7 @@ Two hooks, configured in `.claude-plugin/plugin.json`:
                             "timeout": 10}]}]
 ```
 
-### 6.1 Counter file
+### 7.1 Counter file
 
 Path: `tempfile.gettempdir() / f"toolforge_session_{safe}.count"`, where `safe` is the session id with everything outside `[A-Za-z0-9_-]` stripped (falling back to a 16-char SHA1 prefix when stripping leaves the empty string). Both hooks compute this path the same way; `toolforge_db._session_counter_path` mirrors it so the `status` command can report the live count.
 
@@ -293,7 +382,7 @@ Windows can fail an `open(path, "ab")` with a sharing violation when multiple pr
 
 Stale counters from abandoned sessions are best-effort pruned on every call: any `toolforge_session_*.count` older than 7 days is unlinked. The pruner swallows every `OSError` so a permission glitch on one stale file cannot block the hot path.
 
-### 6.2 SessionEnd
+### 7.2 SessionEnd
 
 Threshold: 5 tool calls (`THRESHOLD = 5` in `session-end-likert.py`). The hook reads `path.stat().st_size`, compares to threshold, and either emits the Likert prompt or returns silently. Either way, the `finally` block unlinks the counter file:
 
@@ -309,7 +398,7 @@ The prompt is emitted as a JSON `hookSpecificOutput` with `additionalContext` co
 
 Both hooks cap stdin at 1 MiB (`MAX_STDIN`). Anything larger exits 1 with a "stdin exceeded 1 MiB cap" message. Bad JSON on stdin in the counter hook exits 1 (silent exit 0 would mask a broken core feedback loop). Bad JSON on stdin in SessionEnd emits a diagnostic via `hookSpecificOutput` and exits 0, because killing the session shutdown for a parser hiccup is the wrong default.
 
-## 7. Fallback behaviour
+## 8. Fallback behaviour
 
 Fallback data lives in `fallback/{category}.json`, one file per supported category (UI, backend, database, testing, devops). Each file is a JSON array of pre-vetted candidate objects matching the schema parsed at step 4 of the curator pipeline (`name`, `type`, `source_url`, `stars`, `last_commit`, `install_command`, `description`).
 
@@ -331,7 +420,7 @@ Three trigger modes:
 
 Partial merge preserves fresh signal: a real, brand-new tool with no ratings should not be discarded because the live result set is short.
 
-## 8. Failure modes and exit codes
+## 9. Failure modes and exit codes
 
 Every script fails loud. A non-zero exit means "do not pretend you got data". The slash command surfaces stderr verbatim.
 
@@ -351,6 +440,8 @@ Every script fails loud. A non-zero exit means "do not pretend you got data". Th
 | `bin/toolforge_validate_url.py`   | 0    | URL allowed (canonicalized hostname printed), or `--list` succeeded, or `--check` allowed. |
 |                                   | 1    | URL refused (off-list, bad bytes, IDN canonicalization failure, missing host), or `--check` refused. |
 |                                   | 2    | Usage error (missing argv).                                                        |
+| `bin/toolforge_local_scan.py`     | 0    | Scan completed and emitted JSON (possibly empty after threshold filtering). Partial results emitted on wall-clock or file-count cap still exit 0 with a stderr note. |
+|                                   | 2    | Usage error (missing or invalid category argv).                                    |
 | `hooks/post-tool-use-counter.py`  | 0    | Counter incremented, or empty stdin (no event), or stale-prune ran cleanly.        |
 |                                   | 1    | JSON malformed, stdin oversized, or all 8 write retries failed.                    |
 | `hooks/session-end-likert.py`     | 0    | Normal: either threshold not met, or prompt emitted, or graceful skip with diagnostic via `hookSpecificOutput`. SessionEnd always exits 0 when emitting a "skipping rating prompt" diagnostic so the session shutdown is not killed. |
@@ -358,7 +449,7 @@ Every script fails loud. A non-zero exit means "do not pretend you got data". Th
 
 `_safe_log` in `toolforge_install.py` is the seam where audit logging can fail without aborting an install that has already executed. It returns False on any `ValueError`, `sqlite3.Error`, or `OSError`, prints the diagnostic to stderr, and the caller decides whether the missing audit is fatal (it is, for successful installs: that is exit 3) or merely noted (for refusals: the install never ran so the log is informational).
 
-## 9. What v1 deliberately omits
+## 10. What v1 deliberately omits
 
 These are intentional non-features. Adding any of them is a v2 conversation, not a v1 bug.
 

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>ToolForge · Flow Studio</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/drawflow@0.0.59/dist/drawflow.min.css" />
+<link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+<header class="app-bar">
+  <div class="brand">
+    <div class="brand-mark"></div>
+    <div>
+      <div class="brand-name">ToolForge</div>
+      <div class="brand-sub">Flow Studio · localhost</div>
+    </div>
+  </div>
+  <div class="bar-stats" id="bar-stats"></div>
+  <div class="bar-actions">
+    <button class="btn ghost" id="btn-refresh" title="Re-scan inventory">↻ Re-scan</button>
+    <button class="btn ghost" id="btn-new">＋ New flow</button>
+    <button class="btn primary" id="btn-export">⬇ Export as skill</button>
+  </div>
+</header>
+
+<main class="grid">
+  <aside class="pane inventory">
+    <div class="pane-head">
+      <input id="search" type="search" placeholder="Search 200+ tools…" autocomplete="off" />
+      <div class="filter-chips" id="type-chips"></div>
+      <div class="filter-chips muted" id="cat-chips"></div>
+    </div>
+    <div class="inventory-list" id="inventory-list"></div>
+  </aside>
+
+  <section class="pane canvas-wrap">
+    <div class="flow-meta">
+      <input class="flow-name" id="flow-name" placeholder="Flow name (e.g. Landing Page)" />
+      <span class="flow-trigger-prefix">/</span>
+      <input class="flow-trigger" id="flow-trigger" placeholder="toolforge-landingpage" />
+      <input class="flow-desc" id="flow-desc" placeholder="One-line description (what this flow accomplishes)" />
+    </div>
+    <div id="drawflow" class="drawflow"></div>
+    <div class="canvas-footer">
+      <span class="hint">Drag tools from the left ▸ connect by hovering node edges ▸ click a node to annotate ▸ Export to register as <code>/your-trigger</code></span>
+      <div class="zoom-ctrls">
+        <button class="btn icon" id="zoom-out">−</button>
+        <button class="btn icon" id="zoom-reset">⟳</button>
+        <button class="btn icon" id="zoom-in">＋</button>
+      </div>
+    </div>
+  </section>
+
+  <aside class="pane inspector">
+    <div class="pane-head">
+      <strong>Inspector</strong>
+      <span class="muted small" id="inspector-sub">Click a node</span>
+    </div>
+    <div class="inspector-body" id="inspector-body">
+      <div class="empty-state">
+        <div class="empty-glyph">◌</div>
+        <p>Select a node to set the prompt / annotation for that step.</p>
+      </div>
+    </div>
+
+    <div class="pane-head">
+      <strong>Saved flows</strong>
+      <span class="muted small">click to load</span>
+    </div>
+    <div class="saved-flows" id="saved-flows"></div>
+  </aside>
+</main>
+
+<div id="toast-stack" class="toast-stack"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/drawflow@0.0.59/dist/drawflow.min.js"></script>
+<script src="/static/app.js" type="module"></script>
+</body>
+</html>
