@@ -1,0 +1,39 @@
+{
+  "name": "toolforge",
+  "version": "0.1.0",
+  "description": "Live discovery, smart installation, and Likert-rated learning for Claude Code plugins, MCP servers, and skills.",
+  "author": {
+    "name": "ToolForge",
+    "email": "28gugales@gmail.com"
+  },
+  "license": "MIT",
+  "keywords": ["tools", "discovery", "marketplace", "mcp", "skills", "ranking"],
+  "commands": ["./commands"],
+  "skills": ["./skills"],
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/post-tool-use-counter.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/session-end-likert.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

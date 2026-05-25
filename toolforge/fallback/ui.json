@@ -1,0 +1,47 @@
+[
+  {
+    "name": "shadcn-ui-mcp",
+    "type": "mcp",
+    "source_url": "https://github.com/Jpisnice/shadcn-ui-mcp-server",
+    "stars": 5200,
+    "last_commit": "2026-01-22",
+    "install_command": "claude mcp add shadcn-ui -- npx -y @jpisnice/shadcn-ui-mcp-server",
+    "description": "Active shadcn/ui MCP server exposing the full component catalog so Claude can install and reference primitives directly."
+  },
+  {
+    "name": "magic-mcp",
+    "type": "mcp",
+    "source_url": "https://github.com/magicuidesign/mcp",
+    "stars": 3100,
+    "last_commit": "2026-05-01",
+    "install_command": "claude mcp add magic -- npx -y @magicuidesign/mcp",
+    "description": "Magic UI MCP server that generates animated React components ready to drop into a Tailwind project."
+  },
+  {
+    "name": "twenty-first-magic",
+    "type": "mcp",
+    "source_url": "https://github.com/21st-dev/magic-mcp",
+    "stars": 4400,
+    "last_commit": "2026-04-28",
+    "install_command": "claude mcp add 21st-magic -- npx -y @21st-dev/magic",
+    "description": "21st.dev Magic MCP server that pulls AI-curated React and Tailwind components from the 21st.dev catalog."
+  },
+  {
+    "name": "frontend-design",
+    "type": "skill",
+    "source_url": "https://github.com/anthropics/claude-plugins-official",
+    "stars": 1800,
+    "last_commit": "2026-03-15",
+    "install_command": "claude plugin install frontend-design@claude-plugins-official",
+    "description": "Official Anthropic skill for distinctive, production-grade frontend interfaces with strong design quality."
+  },
+  {
+    "name": "aceternity-ui-mcp",
+    "type": "mcp",
+    "source_url": "https://github.com/aceternity-ui/aceternityui-mcp",
+    "stars": 1500,
+    "last_commit": "2026-04-30",
+    "install_command": "claude mcp add aceternity -- npx -y aceternityui-mcp",
+    "description": "MCP server surfacing the Aceternity animated components library to Claude for motion-heavy UI work."
+  }
+]

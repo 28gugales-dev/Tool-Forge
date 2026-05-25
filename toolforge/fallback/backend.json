@@ -1,0 +1,47 @@
+[
+  {
+    "name": "supabase-mcp",
+    "type": "mcp",
+    "source_url": "https://github.com/supabase-community/supabase-mcp",
+    "stars": 4200,
+    "last_commit": "2026-05-10",
+    "install_command": "claude mcp add supabase -- npx -y @supabase/mcp-server-supabase",
+    "description": "Official Supabase MCP server exposing tables, RLS policies, edge functions, and auth to Claude."
+  },
+  {
+    "name": "stripe-mcp",
+    "type": "mcp",
+    "source_url": "https://github.com/stripe/agent-toolkit",
+    "stars": 3600,
+    "last_commit": "2026-05-05",
+    "install_command": "claude mcp add stripe -- npx -y @stripe/mcp",
+    "description": "Stripe official MCP server for products, prices, customers, charges, and webhooks."
+  },
+  {
+    "name": "firebase-mcp",
+    "type": "mcp",
+    "source_url": "https://github.com/gannonh/firebase-mcp",
+    "stars": 2100,
+    "last_commit": "2026-04-22",
+    "install_command": "claude mcp add firebase -- npx -y @gannonh/firebase-mcp",
+    "description": "Community Firebase MCP server exposing Firestore, auth, storage, and functions admin operations."
+  },
+  {
+    "name": "fastapi-skill",
+    "type": "skill",
+    "source_url": "https://github.com/wshobson/wshobson-agents",
+    "stars": 5400,
+    "last_commit": "2026-05-12",
+    "install_command": "claude plugin install python-backend@wshobson-agents",
+    "description": "Skill from wshobson agents that generates idiomatic FastAPI routers, dependency injection, and pydantic models."
+  },
+  {
+    "name": "rest-api-architect",
+    "type": "plugin",
+    "source_url": "https://github.com/wshobson/wshobson-agents",
+    "stars": 5400,
+    "last_commit": "2026-05-12",
+    "install_command": "claude plugin install rest-api-architect@wshobson-agents",
+    "description": "Agent that designs and reviews REST APIs end to end, with built-in OpenAPI generation."
+  }
+]

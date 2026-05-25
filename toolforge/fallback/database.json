@@ -1,0 +1,47 @@
+[
+  {
+    "name": "postgres-mcp",
+    "type": "mcp",
+    "source_url": "https://github.com/modelcontextprotocol/servers",
+    "stars": 14500,
+    "last_commit": "2026-05-15",
+    "install_command": "claude mcp add postgres -- npx -y @modelcontextprotocol/server-postgres",
+    "description": "Reference Postgres MCP server from the official servers repo with read-only query and schema inspection."
+  },
+  {
+    "name": "sqlite-mcp",
+    "type": "mcp",
+    "source_url": "https://github.com/modelcontextprotocol/servers",
+    "stars": 14500,
+    "last_commit": "2026-05-10",
+    "install_command": "claude mcp add sqlite -- npx -y mcp-server-sqlite",
+    "description": "SQLite MCP server for local databases covering read, write, schema, and analysis tools."
+  },
+  {
+    "name": "mysql-mcp",
+    "type": "mcp",
+    "source_url": "https://github.com/benborla/mcp-server-mysql",
+    "stars": 1800,
+    "last_commit": "2026-04-30",
+    "install_command": "claude mcp add mysql -- npx -y @benborla29/mcp-server-mysql",
+    "description": "MySQL MCP server with schema inspection, parameterized queries, and read or write modes."
+  },
+  {
+    "name": "supabase-postgres-best-practices",
+    "type": "skill",
+    "source_url": "https://github.com/supabase-community/claude-skills",
+    "stars": 2300,
+    "last_commit": "2026-05-08",
+    "install_command": "claude plugin install supabase@claude-plugins-official",
+    "description": "Postgres performance and best practice skill sourced from Supabase. Use when writing or reviewing queries."
+  },
+  {
+    "name": "data-engineer",
+    "type": "plugin",
+    "source_url": "https://github.com/wshobson/wshobson-agents",
+    "stars": 5400,
+    "last_commit": "2026-05-12",
+    "install_command": "claude plugin install data-engineer@wshobson-agents",
+    "description": "Agent specialized in ETL, warehouse modeling, and data pipeline design across Postgres, BigQuery, Snowflake."
+  }
+]

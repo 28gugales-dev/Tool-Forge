@@ -1,0 +1,47 @@
+[
+  {
+    "name": "github-mcp",
+    "type": "mcp",
+    "source_url": "https://github.com/modelcontextprotocol/servers",
+    "stars": 14500,
+    "last_commit": "2026-04-08",
+    "install_command": "claude mcp add github -- npx -y @modelcontextprotocol/server-github",
+    "description": "Reference GitHub MCP server for PRs, issues, code search, releases, and repo administration."
+  },
+  {
+    "name": "docker-mcp",
+    "type": "mcp",
+    "source_url": "https://github.com/QuantGeekDev/docker-mcp",
+    "stars": 1200,
+    "last_commit": "2026-04-28",
+    "install_command": "claude mcp add docker -- npx -y docker-mcp",
+    "description": "Docker MCP server for image build, container lifecycle, compose orchestration, and registry ops."
+  },
+  {
+    "name": "kubernetes-mcp",
+    "type": "mcp",
+    "source_url": "https://github.com/Flux159/mcp-server-kubernetes",
+    "stars": 2100,
+    "last_commit": "2026-05-04",
+    "install_command": "claude mcp add k8s -- npx -y mcp-server-kubernetes",
+    "description": "Kubernetes MCP server exposing kubectl operations, resource introspection, and helm chart management."
+  },
+  {
+    "name": "terraform-skill",
+    "type": "skill",
+    "source_url": "https://github.com/wshobson/wshobson-agents",
+    "stars": 5400,
+    "last_commit": "2026-05-12",
+    "install_command": "claude plugin install terraform-specialist@wshobson-agents",
+    "description": "Skill for writing and reviewing Terraform modules with state-aware suggestions and security checks."
+  },
+  {
+    "name": "devops-engineer",
+    "type": "plugin",
+    "source_url": "https://github.com/wshobson/wshobson-agents",
+    "stars": 5400,
+    "last_commit": "2026-05-12",
+    "install_command": "claude plugin install devops-engineer@wshobson-agents",
+    "description": "Agent for CI/CD pipeline design, infra automation, monitoring setup, and incident response runbooks."
+  }
+]

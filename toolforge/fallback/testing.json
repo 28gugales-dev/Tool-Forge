@@ -1,0 +1,47 @@
+[
+  {
+    "name": "playwright-mcp",
+    "type": "mcp",
+    "source_url": "https://github.com/microsoft/playwright-mcp",
+    "stars": 8200,
+    "last_commit": "2026-05-14",
+    "install_command": "claude mcp add playwright -- npx -y @playwright/mcp",
+    "description": "Microsoft official Playwright MCP server for browser automation, e2e tests, and visual diffing."
+  },
+  {
+    "name": "playwright-mcp-executeautomation",
+    "type": "mcp",
+    "source_url": "https://github.com/executeautomation/mcp-playwright",
+    "stars": 2700,
+    "last_commit": "2026-04-26",
+    "install_command": "claude mcp add playwright-ea -- npx -y @executeautomation/playwright-mcp-server",
+    "description": "Community Playwright MCP server with recorder mode, network mocking, and richer assertion helpers."
+  },
+  {
+    "name": "test-automator",
+    "type": "plugin",
+    "source_url": "https://github.com/wshobson/wshobson-agents",
+    "stars": 5400,
+    "last_commit": "2026-05-12",
+    "install_command": "claude plugin install test-automator@wshobson-agents",
+    "description": "Agent that designs test suites, identifies coverage gaps, and writes both unit and integration tests."
+  },
+  {
+    "name": "browserbase-mcp",
+    "type": "mcp",
+    "source_url": "https://github.com/browserbase/mcp-server-browserbase",
+    "stars": 1900,
+    "last_commit": "2026-05-02",
+    "install_command": "claude mcp add browserbase -- npx -y @browserbasehq/mcp-server-browserbase",
+    "description": "Browserbase MCP server for remote headless browser sessions, parallel test runs, and replay sharing."
+  },
+  {
+    "name": "browser-use-mcp",
+    "type": "mcp",
+    "source_url": "https://github.com/browser-use/browser-use",
+    "stars": 6700,
+    "last_commit": "2026-05-11",
+    "install_command": "claude mcp add browser-use -- npx -y browser-use-mcp",
+    "description": "Browser Use MCP server for agentic browser automation, smart selectors, and visual click targeting."
+  }
+]

@@ -1,0 +1,15 @@
+{
+  "name": "local-toolforge",
+  "owner": {
+    "name": "ToolForge",
+    "email": "28gugales@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "toolforge",
+      "source": "./",
+      "description": "Live discovery, smart installation, and Likert-rated learning for Claude Code tools.",
+      "version": "0.1.0"
+    }
+  ]
+}
