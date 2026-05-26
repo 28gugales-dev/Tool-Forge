@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Optional
 
 DB_PATH = Path(os.path.expanduser("~/.claude/toolforge.db"))
-DECAY_HALFLIFE_DAYS = 180.0
+DECAY_HALFLIFE_DAYS = 75.0  # AI tooling moves fast — was 180d, cut to ~2.5mo
 SCHEMA_VERSION = 2
 BAYES_PRIOR_MEAN = 3.0
 BAYES_PRIOR_WEIGHT = 5.0

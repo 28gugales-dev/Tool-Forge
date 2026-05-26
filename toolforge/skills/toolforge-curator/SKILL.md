@@ -110,7 +110,7 @@ Build the name list from BOTH sources: every web-parsed candidate name AND every
 python "${CLAUDE_PLUGIN_ROOT}/bin/toolforge_db.py" get_rating_stats_bulk <name1> <name2> ...
 ```
 
-Returns JSON: `{"<name>": {"sum": int, "n": int, "avg": float|null, "decayed_avg": float|null}, ...}`. A `null` avg means no ratings yet. The `decayed_avg` field applies an exponential half-life of 180 days so old ratings fade.
+Returns JSON: `{"<name>": {"sum": int, "n": int, "avg": float|null, "decayed_avg": float|null}, ...}`. A `null` avg means no ratings yet. The `decayed_avg` field applies an exponential half-life of 75 days so old ratings fade fast — AI tooling moves quickly and a positive rating from 6 months ago is no longer evidence of current quality.
 
 ### 6. Compute composite score (with Bayesian shrinkage)
 
@@ -119,7 +119,7 @@ Two formulas, branched on entry origin. Bayesian Likert shrinkage is identical i
 **Web entries** (from WebFetch parsing):
 
 - `stars_norm = min(1.0, log1p(stars) / log1p(50000))` (log scale so 90k-star and 5k-star repos don't both pin to 1.0; clamped so extreme outliers cap at 1.0)
-- `recency_norm = exp(-days_since_last_commit / 180.0)` (smooth exponential, never zero, no cliff at day 366)
+- `recency_norm = exp(-days_since_last_commit / 75.0)` (smooth exponential, never zero, no cliff at day 366; 75d half-life because AI tooling churns fast)
 - Bayesian-shrunk Likert (prior mean 3.0, prior weight C=5):
   - If `n == 0`: `likert_norm = 0.6` (slight pro-prior, doesn't punish unrated)
   - Else: `posterior = (decayed_avg * n + 3.0 * 5) / (n + 5)`, `likert_norm = posterior / 5.0`

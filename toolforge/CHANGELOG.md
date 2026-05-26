@@ -37,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `/toolforge-status` dashboard (total installs, top 5 Bayesian-shrunk decayed scores, last 5 ratings, current session count)
 - `/toolforge-rate <1-5>` Likert rating command
 - `toolforge-curator` skill with hard URL allow-list (`github.com`, `raw.githubusercontent.com`, `claudemarketplaces.com`, `modelcontextprotocol.io`, `aitmpl.com`, `npmjs.com`, `www.npmjs.com`)
-- Bayesian-shrunk composite ranking (log-stars, exp-recency, Bayesian Likert with prior mean 3.0 and weight 5, half-life 180 days)
+- Bayesian-shrunk composite ranking (log-stars, exp-recency, Bayesian Likert with prior mean 3.0 and weight 5, half-life 75 days — AI tooling moves fast)
 - `toolforge_install.py` argv allow-list validator with deny-list shell metacharacter pre-filter, head allow-list (claude, npx, uvx, npm, pip, pipx, uv), per-head subcommand allow-list, recursive validation for `claude mcp add`, `shutil.which` PATH resolution with user-writable bin refusal
 - `toolforge_validate_url.py` URL allow-list gate with IDN canonicalization and control-byte filtering
 - `toolforge_rate.py` rating wrapper with `^[1-5]$` regex at Python layer

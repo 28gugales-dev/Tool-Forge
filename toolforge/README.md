@@ -93,7 +93,7 @@ When you run `/toolforge UI`, the `toolforge-curator` skill is invoked. It:
 3. Runs `WebFetch` against each, locked to an allow-list of 7 trusted hosts: `github.com`, `raw.githubusercontent.com`, `claudemarketplaces.com`, `modelcontextprotocol.io`, `aitmpl.com`, `npmjs.com`, `www.npmjs.com`. The lock is what blocks SEO spam.
 4. Parses each result for name, install command, stars, last commit date, and a one-line description.
 5. Looks up the historical Likert average for each candidate from the local SQLite store via one bulk shell-out.
-6. Computes a composite score blending log-normalized stars, exponential recency with a 180-day half-life, and a Bayesian-shrunk Likert average (prior mean 3.0, prior weight 5) that also fades old ratings on the same 180-day half-life. See `ARCHITECTURE.md` for the exact formula.
+6. Computes a composite score blending log-normalized stars, exponential recency with a **75-day half-life**, and a Bayesian-shrunk Likert average (prior mean 3.0, prior weight 5) that also fades old ratings on the same 75-day half-life. AI tooling moves fast — a repo last touched 3 months ago is meaningfully stale; a rating from 6 months ago is no longer evidence of current quality. See `ARCHITECTURE.md` for the exact formula.
 7. Returns the top 5 sorted by score, with install commands ready to copy.
 
 Note on `claude mcp add`: the CLI requires a `--` separator between its own flags and the wrapped install command (for example `claude mcp add foo -- npx -y some-pkg`). The curator and the offline fallback entries both write the `--` separator explicitly so the install line works as-is when you paste it.

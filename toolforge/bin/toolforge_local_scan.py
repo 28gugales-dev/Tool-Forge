@@ -11,7 +11,7 @@ web-discovered candidates, with extra fields:
   - installed    : True if the user can already invoke this tool today
   - category_score : 0.0-1.0 keyword-match confidence
   - stars_norm   : fixed 0.4 for local sources (no GitHub stars to read)
-  - recency_norm : exp(-days/180) from `git log -1` if path is a git repo, else file mtime
+  - recency_norm : exp(-days/75) from `git log -1` if path is a git repo, else file mtime
 
 Config: ~/.claude/toolforge-config.json
   { "local_paths": ["/path/one", "/path/two"] }
@@ -49,7 +49,7 @@ MAX_FILES_SCANNED = 2000
 MAX_FILE_READ_BYTES = 4096
 MAX_DEPTH = 4
 LOCAL_STARS_NORM = 0.4
-DECAY_HALFLIFE_DAYS = 180.0
+DECAY_HALFLIFE_DAYS = 75.0  # AI tooling moves fast — was 180d, cut to ~2.5mo
 RECENCY_SECONDS_PER_DAY = 86400.0
 MIN_CATEGORY_SCORE = 0.3
 MAX_LOCAL_PER_CATEGORY = 10

@@ -173,7 +173,7 @@ Each candidate emitted by the scanner is a JSON object with these fields:
 | `description`   | string  | First non-empty description line from the SKILL.md / agent frontmatter / MCP manifest, capped at the 4 KiB per-file read limit. |
 | `category_score`| float   | Sum of category-keyword hits in `name + description`, normalized to `[0, 1]` against the per-category keyword count. Entries below the drop threshold (`0.3`) are discarded. |
 | `stars_norm`    | float   | Fixed at `0.4` for all local entries (star counts do not apply to local sources; `0.4` lands near the middle of the live-discovery distribution so local entries are neither artificially advantaged nor penalized). |
-| `recency_norm`  | float   | Exponential decay over 180 days, derived from `git log -1 --format=%ct <path>` when the source is a git repo (timeout 2 seconds), otherwise the file mtime. |
+| `recency_norm`  | float   | Exponential decay over 75 days (AI tooling moves fast — was 180d), derived from `git log -1 --format=%ct <path>` when the source is a git repo (timeout 2 seconds), otherwise the file mtime. |
 | `category`      | string  | One of `ui`, `backend`, `database`, `testing`, `devops`.                                             |
 
 ### 4.3 Categorization heuristic
@@ -319,7 +319,7 @@ Composite score blends three signals, weights `0.3 / 0.3 / 0.4`. The Bayesian-sh
 
 ```
 stars_norm   = min(1.0, log1p(stars) / log1p(50000))
-recency_norm = exp(-days_since_last_commit / 180.0)
+recency_norm = exp(-days_since_last_commit / 75.0)
 
 if n == 0:
     likert_norm = 0.6
@@ -333,8 +333,8 @@ score = stars_norm * 0.3 + recency_norm * 0.3 + likert_norm * 0.4
 Notes per term:
 
 - `stars_norm`: log scale so a 90k-star repo and a 5k-star repo do not both pin to 1.0. Clamp at 1.0 so single outliers cannot dominate.
-- `recency_norm`: smooth exponential decay, never zero, no cliff at day 366. Half-life 180 days matches the rating half-life so the two recency-aware terms move in lockstep.
-- `decayed_avg` is computed in `toolforge_db._compute_stats`: per-rating weight `exp(-age_days / 180.0)`, then weighted mean. If the sum of weights collapses to a near-zero number (every rating is several half-lives old), the function falls back to the raw arithmetic mean and prints a diagnostic to stderr.
+- `recency_norm`: smooth exponential decay, never zero, no cliff at day 366. Half-life 75 days matches the rating half-life so the two recency-aware terms move in lockstep. The 75-day choice reflects how fast AI tooling churns — a repo silent for ~3 months is meaningfully stale; one silent for ~6 months is almost certainly abandoned.
+- `decayed_avg` is computed in `toolforge_db._compute_stats`: per-rating weight `exp(-age_days / 75.0)`, then weighted mean. If the sum of weights collapses to a near-zero number (every rating is several half-lives old), the function falls back to the raw arithmetic mean and prints a diagnostic to stderr.
 - `likert_norm` for `n == 0` is 0.6, deliberately above the neutral 3.0/5.0 = 0.60 prior implies, so unrated tools rank cleanly between actively-disliked and moderately-liked tools instead of being penalized for absence of data.
 
 Worked numbers (also reproduced in the skill prompt so the model can sanity-check):

@@ -48,7 +48,7 @@ FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---", re.DOTALL)
 MIN_CATEGORY_SCORE = 0.3
 MAX_CURATE_PER_CATEGORY = 10
 LOCAL_STARS_NORM = 0.4
-DECAY_HALFLIFE_DAYS = 180.0
+DECAY_HALFLIFE_DAYS = 75.0  # AI tooling moves fast — was 180d, cut to ~2.5mo
 RECENCY_SECONDS_PER_DAY = 86400.0
 SUBPROCESS_TIMEOUT_SECONDS = 4.0
 
@@ -496,7 +496,7 @@ def _curator_category_score(name: str, description: str, path: str, category: st
 
 
 def _recency_norm_from_path(raw_path: Optional[str]) -> float:
-    """exp(-days/180) from `git log -1` (if entry sits in a git repo) else file mtime.
+    """exp(-days/75) from `git log -1` (if entry sits in a git repo) else file mtime.
     Returns 1.0 when path is None (installed-only entry without a local file).
     """
     if not raw_path:
