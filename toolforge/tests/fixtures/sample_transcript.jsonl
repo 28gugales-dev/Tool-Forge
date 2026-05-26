@@ -1,0 +1,18 @@
+{"type": "user", "timestamp": "__RECENT__", "message": {"content": "redacted user prompt — must never be parsed"}}
+{"type": "assistant", "timestamp": "__RECENT__", "message": {"content": [{"type": "text", "text": "thinking aloud"}, {"type": "tool_use", "id": "t1", "name": "Edit", "input": {"file_path": "/x/y.py"}}]}}
+{"type": "assistant", "timestamp": "__RECENT__", "message": {"content": [{"type": "tool_use", "id": "t2", "name": "Skill", "input": {"skill": "GSAP-React"}}]}}
+{"type": "assistant", "timestamp": "__RECENT__", "message": {"content": [{"type": "tool_use", "id": "t3", "name": "Skill", "input": {"skill": "skill-creator:skill-creator"}}]}}
+{"type": "assistant", "timestamp": "__RECENT__", "message": {"content": [{"type": "tool_use", "id": "t4", "name": "Task", "input": {"subagent_type": "Explore"}}]}}
+{"type": "assistant", "timestamp": "__RECENT__", "message": {"content": [{"type": "tool_use", "id": "t5", "name": "Agent", "input": {"subagent_type": "general-purpose"}}]}}
+{"type": "assistant", "timestamp": "__RECENT__", "message": {"content": [{"type": "tool_use", "id": "t6", "name": "mcp__plugin_github_github__add_issue_comment", "input": {"x": 1}}]}}
+{"type": "assistant", "timestamp": "__RECENT__", "message": {"content": [{"type": "tool_use", "id": "t7", "name": "mcp__plugin_context7_context7__query-docs"}]}}
+not valid json — should be skipped, scanner must not abort
+{"type": "assistant", "timestamp": "__RECENT__", "message": {"content": [{"type": "tool_use", "id": "t8", "name": "Bash"}, {"type": "tool_use", "id": "t9", "name": "Grep"}, {"type": "tool_use", "id": "t10", "name": "Read"}, {"type": "tool_use", "id": "t11", "name": "Edit"}]}}
+{"type": "assistant", "timestamp": "__RECENT__", "message": {"content": []}}
+{"type": "assistant", "timestamp": "__RECENT__", "message": {}}
+{"type": "assistant", "timestamp": "__RECENT__"}
+{"type": "assistant", "timestamp": "__OLD__", "message": {"content": [{"type": "tool_use", "id": "t12", "name": "Edit"}]}}
+{"type": "assistant", "timestamp": "__RECENT__", "message": {"content": [{"type": "tool_use", "id": "t13", "name": "Skill", "input": {"skill": ""}}]}}
+{"type": "assistant", "timestamp": "__RECENT__", "message": {"content": [{"type": "tool_use", "id": "t14", "name": "Skill"}]}}
+{"type": "assistant", "timestamp": "__RECENT__", "message": {"content": [{"type": "tool_use", "id": "t15", "name": "Skill", "input": {"skill": "future-skill", "new_anthropic_field": "ignored"}}]}}
+{"type": "user", "timestamp": "__RECENT__", "message": {"content": [{"type": "tool_use", "name": "Edit"}]}}
