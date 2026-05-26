@@ -24,12 +24,14 @@ from typing import Optional
 
 DB_PATH = Path(os.path.expanduser("~/.claude/toolforge.db"))
 DECAY_HALFLIFE_DAYS = 180.0
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 BAYES_PRIOR_MEAN = 3.0
 BAYES_PRIOR_WEIGHT = 5.0
 
 TOOL_NAME_RE = re.compile(r"^[a-z0-9._@/-]{1,80}$")
+TOOL_KEY_RE = re.compile(r"^[a-z]+:[a-z0-9._@/-]{1,80}$")
 CATEGORY_RE = re.compile(r"^[a-z]{1,32}$")
+URL_RE = re.compile(r"^https?://[A-Za-z0-9.\-/_:?&=%@~+]{4,2048}$")
 
 _session_count_had_error = False
 
@@ -60,6 +62,21 @@ def _validate_tool_name(name: str) -> str:
     return n
 
 
+def _validate_tool_key(key: str) -> str:
+    """Tool keys are typed: skill:foo, mcp:github, plugin:bar, agent:baz, command:qux."""
+    k = _normalize(key)
+    if not TOOL_KEY_RE.match(k):
+        raise ValueError(f"invalid tool_key {key!r}: must match {TOOL_KEY_RE.pattern}")
+    return k
+
+
+def _validate_url(url: str) -> str:
+    u = url.strip()
+    if not URL_RE.match(u):
+        raise ValueError(f"invalid url {url!r}: must match {URL_RE.pattern}")
+    return u
+
+
 def init_db() -> None:
     conn = _connect()
     try:
@@ -83,8 +100,35 @@ def init_db() -> None:
             """
         )
         current = conn.execute("PRAGMA user_version").fetchone()[0]
+        if current < 2:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS usage_stats (
+                    tool_key     TEXT PRIMARY KEY,
+                    count_30d    INTEGER NOT NULL DEFAULT 0,
+                    last_used_at TEXT,
+                    computed_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE TABLE IF NOT EXISTS deprecations (
+                    source_url   TEXT PRIMARY KEY,
+                    tool_name    TEXT NOT NULL,
+                    archived     INTEGER NOT NULL DEFAULT 0,
+                    last_push_at TEXT,
+                    checked_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_dep_tool ON deprecations(tool_name);
+                CREATE TABLE IF NOT EXISTS routing_scores (
+                    tool_key     TEXT PRIMARY KEY,
+                    desc_match   REAL NOT NULL DEFAULT 0.0,
+                    name_match   REAL NOT NULL DEFAULT 0.0,
+                    usage_boost  REAL NOT NULL DEFAULT 0.0,
+                    likert_norm  REAL NOT NULL DEFAULT 0.6,
+                    composite    REAL NOT NULL DEFAULT 0.0,
+                    computed_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                """
+            )
         if current < SCHEMA_VERSION:
-            # Future migrations chain here: if current < 2: ... ; if current < 3: ... ;
             conn.execute(f"PRAGMA user_version = {int(SCHEMA_VERSION)}")
         conn.commit()
     finally:
@@ -196,6 +240,170 @@ def get_rating_stats_bulk(names: list[str]) -> dict:
 
 def get_avg_rating(tool_name: str) -> Optional[float]:
     return get_rating_stats(tool_name)["avg"]
+
+
+# ---------- v2: usage_stats helpers ----------
+
+def upsert_usage_stats(tool_key: str, count_30d: int, last_used_at: Optional[str]) -> None:
+    key = _validate_tool_key(tool_key)
+    if count_30d < 0:
+        raise ValueError("count_30d must be non-negative")
+    init_db()
+    conn = _connect()
+    try:
+        conn.execute(
+            """
+            INSERT INTO usage_stats (tool_key, count_30d, last_used_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(tool_key) DO UPDATE SET
+                count_30d    = excluded.count_30d,
+                last_used_at = excluded.last_used_at,
+                computed_at  = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            """,
+            (key, int(count_30d), last_used_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_usage_stats_bulk(keys: list[str]) -> dict:
+    """Bulk lookup. Returns {key: {count_30d, last_used_at, computed_at}} or empty defaults."""
+    init_db()
+    result = {k: {"count_30d": 0, "last_used_at": None, "computed_at": None} for k in keys}
+    if not keys:
+        return result
+    norm = [_validate_tool_key(k) for k in keys]
+    placeholders = ",".join("?" * len(norm))
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            f"SELECT tool_key, count_30d, last_used_at, computed_at FROM usage_stats "
+            f"WHERE tool_key IN ({placeholders})",
+            norm,
+        ).fetchall()
+    finally:
+        conn.close()
+    norm_to_orig = {}
+    for orig in keys:
+        norm_to_orig.setdefault(_normalize(orig), orig)
+    for k, c, l, t in rows:
+        orig = norm_to_orig.get(k, k)
+        result[orig] = {"count_30d": int(c), "last_used_at": l, "computed_at": t}
+    return result
+
+
+# ---------- v2: deprecations helpers ----------
+
+def upsert_deprecation(source_url: str, tool_name: str, archived: bool, last_push_at: Optional[str]) -> None:
+    url = _validate_url(source_url)
+    name = _validate_tool_name(tool_name)
+    init_db()
+    conn = _connect()
+    try:
+        conn.execute(
+            """
+            INSERT INTO deprecations (source_url, tool_name, archived, last_push_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(source_url) DO UPDATE SET
+                tool_name    = excluded.tool_name,
+                archived     = excluded.archived,
+                last_push_at = excluded.last_push_at,
+                checked_at   = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            """,
+            (url, name, 1 if archived else 0, last_push_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_deprecation(source_url: str) -> Optional[dict]:
+    init_db()
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT tool_name, archived, last_push_at, checked_at FROM deprecations WHERE source_url = ?",
+            (source_url.strip(),),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return None
+    return {
+        "tool_name": row[0],
+        "archived": bool(row[1]),
+        "last_push_at": row[2],
+        "checked_at": row[3],
+    }
+
+
+# ---------- v2: routing_scores helpers ----------
+
+def upsert_routing_score(
+    tool_key: str,
+    desc_match: float,
+    name_match: float,
+    usage_boost: float,
+    likert_norm: float,
+    composite: float,
+) -> None:
+    key = _validate_tool_key(tool_key)
+    for v, n in [(desc_match, "desc_match"), (name_match, "name_match"),
+                 (usage_boost, "usage_boost"), (likert_norm, "likert_norm"),
+                 (composite, "composite")]:
+        if not 0.0 <= v <= 1.5:
+            raise ValueError(f"{n}={v} out of plausible 0.0-1.5 range")
+    init_db()
+    conn = _connect()
+    try:
+        conn.execute(
+            """
+            INSERT INTO routing_scores (tool_key, desc_match, name_match, usage_boost, likert_norm, composite)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tool_key) DO UPDATE SET
+                desc_match  = excluded.desc_match,
+                name_match  = excluded.name_match,
+                usage_boost = excluded.usage_boost,
+                likert_norm = excluded.likert_norm,
+                composite   = excluded.composite,
+                computed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            """,
+            (key, float(desc_match), float(name_match), float(usage_boost),
+             float(likert_norm), float(composite)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_routing_scores_bulk(keys: list[str]) -> dict:
+    init_db()
+    result = {k: None for k in keys}
+    if not keys:
+        return result
+    norm = [_validate_tool_key(k) for k in keys]
+    placeholders = ",".join("?" * len(norm))
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            f"SELECT tool_key, desc_match, name_match, usage_boost, likert_norm, composite, computed_at "
+            f"FROM routing_scores WHERE tool_key IN ({placeholders})",
+            norm,
+        ).fetchall()
+    finally:
+        conn.close()
+    norm_to_orig = {}
+    for orig in keys:
+        norm_to_orig.setdefault(_normalize(orig), orig)
+    for k, d, n, u, l, c, t in rows:
+        orig = norm_to_orig.get(k, k)
+        result[orig] = {
+            "desc_match": float(d), "name_match": float(n),
+            "usage_boost": float(u), "likert_norm": float(l),
+            "composite": float(c), "computed_at": t,
+        }
+    return result
 
 
 def get_last_installed_tool() -> Optional[str]:
@@ -313,17 +521,145 @@ def status() -> str:
     return "\n".join(lines)
 
 
+def _self_test() -> int:
+    """Smoke test that exercises v1 + v2 schema against a temp DB.
+
+    Does NOT touch ~/.claude/toolforge.db. Override via TOOLFORGE_DB env var.
+    """
+    global DB_PATH
+    saved = DB_PATH
+    tmpdir = Path(tempfile.mkdtemp(prefix="toolforge_test_"))
+    DB_PATH = tmpdir / "toolforge.db"
+    passed = 0
+    failed = 0
+    try:
+        # 1. init + schema version
+        init_db()
+        conn = _connect()
+        try:
+            v = conn.execute("PRAGMA user_version").fetchone()[0]
+        finally:
+            conn.close()
+        if v == SCHEMA_VERSION:
+            print(f"OK: schema migrated to v{v}")
+            passed += 1
+        else:
+            print(f"FAIL: schema expected v{SCHEMA_VERSION}, got v{v}")
+            failed += 1
+
+        # 2. v1 path: log_install + log_rating + get_rating_stats
+        log_install("alpha-tool", "ui", True)
+        log_rating("alpha-tool", 5)
+        log_rating("alpha-tool", 4)
+        stats = get_rating_stats("alpha-tool")
+        if stats["n"] == 2 and abs(stats["avg"] - 4.5) < 1e-6:
+            print("OK: v1 ratings path")
+            passed += 1
+        else:
+            print(f"FAIL: v1 ratings got {stats}")
+            failed += 1
+
+        # 3. v2 usage_stats roundtrip
+        upsert_usage_stats("skill:gsap-react", 12, "2026-05-25T10:00:00Z")
+        upsert_usage_stats("mcp:github", 3, "2026-05-25T11:00:00Z")
+        bulk = get_usage_stats_bulk(["skill:gsap-react", "mcp:github", "skill:nonexistent"])
+        if (bulk["skill:gsap-react"]["count_30d"] == 12
+                and bulk["mcp:github"]["count_30d"] == 3
+                and bulk["skill:nonexistent"]["count_30d"] == 0):
+            print("OK: v2 usage_stats roundtrip")
+            passed += 1
+        else:
+            print(f"FAIL: v2 usage_stats got {bulk}")
+            failed += 1
+
+        # 4. v2 usage_stats UPSERT replaces
+        upsert_usage_stats("skill:gsap-react", 20, "2026-05-26T10:00:00Z")
+        bulk2 = get_usage_stats_bulk(["skill:gsap-react"])
+        if bulk2["skill:gsap-react"]["count_30d"] == 20:
+            print("OK: v2 usage_stats upsert overwrites")
+            passed += 1
+        else:
+            print(f"FAIL: upsert got {bulk2}")
+            failed += 1
+
+        # 5. v2 deprecations
+        upsert_deprecation("https://github.com/foo/bar", "foo-bar", True, "2025-01-01T00:00:00Z")
+        dep = get_deprecation("https://github.com/foo/bar")
+        if dep and dep["archived"] is True and dep["tool_name"] == "foo-bar":
+            print("OK: v2 deprecations roundtrip")
+            passed += 1
+        else:
+            print(f"FAIL: deprecation got {dep}")
+            failed += 1
+
+        # 6. v2 routing_scores
+        upsert_routing_score("skill:impeccable", 0.5, 0.7, 0.3, 0.8, 0.6)
+        scores = get_routing_scores_bulk(["skill:impeccable", "skill:missing"])
+        if (scores["skill:impeccable"]
+                and abs(scores["skill:impeccable"]["composite"] - 0.6) < 1e-6
+                and scores["skill:missing"] is None):
+            print("OK: v2 routing_scores roundtrip")
+            passed += 1
+        else:
+            print(f"FAIL: routing got {scores}")
+            failed += 1
+
+        # 7. validation: bad tool_key rejected
+        try:
+            upsert_usage_stats("invalid no colon", 1, None)
+            print("FAIL: invalid tool_key accepted")
+            failed += 1
+        except ValueError:
+            print("OK: invalid tool_key rejected")
+            passed += 1
+
+        # 8. validation: bad url rejected
+        try:
+            upsert_deprecation("not-a-url", "x", False, None)
+            print("FAIL: invalid url accepted")
+            failed += 1
+        except ValueError:
+            print("OK: invalid url rejected")
+            passed += 1
+
+        # 9. idempotency: init_db twice no error
+        init_db()
+        init_db()
+        print("OK: init_db idempotent")
+        passed += 1
+
+    finally:
+        DB_PATH = saved
+        try:
+            for p in tmpdir.iterdir():
+                p.unlink()
+            tmpdir.rmdir()
+        except OSError:
+            pass
+
+    print(f"--- self-test: {passed} passed, {failed} failed ---")
+    return 0 if failed == 0 else 1
+
+
 def _usage() -> str:
     return (
         "Usage:\n"
         "  toolforge_db.py init\n"
         "  toolforge_db.py log_install <name> <category> <approved:0|1>\n"
         "  toolforge_db.py log_rating <name> <1-5>\n"
-        "  toolforge_db.py get_avg_rating <name>           # prints 'null' or float\n"
-        "  toolforge_db.py get_rating_stats <name>         # prints JSON dict\n"
-        "  toolforge_db.py get_rating_stats_bulk <n1> ...  # prints JSON map\n"
+        "  toolforge_db.py get_avg_rating <name>\n"
+        "  toolforge_db.py get_rating_stats <name>\n"
+        "  toolforge_db.py get_rating_stats_bulk <n1> ...\n"
         "  toolforge_db.py rate_last <1-5>\n"
         "  toolforge_db.py status\n"
+        "  toolforge_db.py upsert_usage <tool_key> <count_30d> [<last_used_at>]\n"
+        "  toolforge_db.py get_usage_bulk <k1> ...\n"
+        "  toolforge_db.py upsert_deprecation <url> <tool_name> <archived:0|1> [<last_push_at>]\n"
+        "  toolforge_db.py get_deprecation <url>\n"
+        "  toolforge_db.py upsert_routing <tool_key> <desc> <name> <usage> <likert> <composite>\n"
+        "  toolforge_db.py get_routing_bulk <k1> ...\n"
+        "  toolforge_db.py schema_version\n"
+        "  toolforge_db.py --self-test\n"
     )
 
 
@@ -368,6 +704,45 @@ def main(argv: list[str]) -> int:
             if _session_count_had_error:
                 return 3
             return 0
+        if cmd == "upsert_usage":
+            last_used = argv[4] if len(argv) > 4 else None
+            upsert_usage_stats(argv[2], int(argv[3]), last_used)
+            print("ok")
+            return 0
+        if cmd == "get_usage_bulk":
+            print(json.dumps(get_usage_stats_bulk(list(argv[2:]))))
+            return 0
+        if cmd == "upsert_deprecation":
+            last_push = argv[5] if len(argv) > 5 else None
+            archived_flag = argv[4] in {"1", "true", "True"}
+            upsert_deprecation(argv[2], argv[3], archived_flag, last_push)
+            print("ok")
+            return 0
+        if cmd == "get_deprecation":
+            out = get_deprecation(argv[2])
+            print(json.dumps(out))
+            return 0
+        if cmd == "upsert_routing":
+            upsert_routing_score(
+                argv[2], float(argv[3]), float(argv[4]), float(argv[5]),
+                float(argv[6]), float(argv[7]),
+            )
+            print("ok")
+            return 0
+        if cmd == "get_routing_bulk":
+            print(json.dumps(get_routing_scores_bulk(list(argv[2:]))))
+            return 0
+        if cmd == "schema_version":
+            init_db()
+            conn = _connect()
+            try:
+                v = conn.execute("PRAGMA user_version").fetchone()[0]
+            finally:
+                conn.close()
+            print(v)
+            return 0
+        if cmd == "--self-test":
+            return _self_test()
     except sqlite3.Error as exc:
         print(f"toolforge_db sqlite error: {exc}", file=sys.stderr)
         return 3
