@@ -1,3 +1,4 @@
+import './sidebar-resize.js';
 /* ToolForge Flow Studio — vanilla module, no bundler. */
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -10,7 +11,14 @@ const state = {
   selectedNodeId: null,
   nodeMeta: new Map(),
   savedFlows: [],
+  activeTab: "node",       // "node" | "preview"
+  preview: { markdown: "", cycle: null, dirty: false },
+  previewTimer: null,
 };
+
+const PREVIEW_DEBOUNCE_MS = 250;
+
+let csrfToken = null;
 
 const TYPE_ORDER = ["skill", "command", "mcp", "plugin", "agent", "repo"];
 
@@ -45,10 +53,23 @@ function toast(title, body = "", kind = "info", ttl = 3200) {
   }, ttl);
 }
 
+// FIX_CONVENTIONS §9 — adapter over toast() so F04/F05 callers can use the
+// (msg, level) shape from the playbook without forking a parallel system.
+function showToast(msg, level = "info") {
+  const title = level === "error" ? "Error" : level === "warn" ? "Warning" : "Notice";
+  toast(title, msg, level, level === "error" || level === "warn" ? 6000 : 3200);
+}
+
 async function api(path, opts = {}) {
+  const method = (opts.method || "GET").toUpperCase();
+  const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+  if (method !== "GET" && method !== "HEAD" && csrfToken) {
+    headers["X-CSRF-Token"] = csrfToken;
+  }
   const r = await fetch(path, {
     ...opts,
-    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+    headers,
+    credentials: "same-origin",
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
   if (!r.ok) {
@@ -56,6 +77,13 @@ async function api(path, opts = {}) {
     throw new Error(`${r.status} ${r.statusText}: ${txt.slice(0, 200)}`);
   }
   return r.json();
+}
+
+async function loadCsrfToken() {
+  const r = await fetch("/api/csrf", { credentials: "same-origin" });
+  if (!r.ok) throw new Error(`csrf bootstrap failed: ${r.status}`);
+  const j = await r.json();
+  csrfToken = j.token;
 }
 
 async function loadInventory() {
@@ -176,7 +204,14 @@ function initEditor() {
     e.preventDefault();
     const raw = e.dataTransfer.getData("application/x-toolforge-tool");
     if (!raw) return;
-    const tool = JSON.parse(raw);
+    // FIXED in F34 (see SKETCHY_CODE_AUDIT.md#s4-8) — surface malformed drop payload via toast.
+    let tool;
+    try {
+      tool = JSON.parse(raw);
+    } catch (err) {
+      showToast("Drop payload invalid JSON: " + err.message, "warn");
+      return;
+    }
     const rect = host.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
@@ -188,11 +223,217 @@ function initEditor() {
   editor.on("nodeRemoved", id => {
     state.nodeMeta.delete(String(id));
     if (String(state.selectedNodeId) === String(id)) clearInspector();
+    schedulePreviewRefresh();
+  });
+  editor.on("nodeCreated", () => schedulePreviewRefresh());
+  // Drawflow v0.0.59 fires connectionCreated/connectionRemoved with
+  // {output_id, input_id, output_class, input_class}. Either way we just
+  // need a redraw trigger — refresh path highlight + preview.
+  editor.on("connectionCreated", () => {
+    refreshPathHighlight();
+    schedulePreviewRefresh();
+  });
+  editor.on("connectionRemoved", () => {
+    refreshPathHighlight();
+    schedulePreviewRefresh();
   });
 
   $("#zoom-in").addEventListener("click", () => editor.zoom_in());
   $("#zoom-out").addEventListener("click", () => editor.zoom_out());
   $("#zoom-reset").addEventListener("click", () => editor.zoom_reset());
+}
+
+/* ── path tracing + preview ───────────────────────────────────
+ * Walks the current drawflow graph to compute upstream / downstream
+ * sets relative to the selected node, then toggles CSS classes on
+ * the drawflow node DIVs and the connection SVGs. CSS does the paint
+ * — JS stays simple. The same adjacency feeds the live preview pane
+ * via /api/preview, which round-trips through render_skill_md so the
+ * markdown matches what Export will write.
+ */
+
+function buildAdjacency() {
+  // Returns { fwd: Map<id,Set<id>>, rev: Map<id,Set<id>>, nodeIds: Set<id>, edges: Array<[s,t]> }
+  const editor = state.editor;
+  if (!editor) return { fwd: new Map(), rev: new Map(), nodeIds: new Set(), edges: [] };
+  const data = editor.export().drawflow.Home.data || {};
+  const fwd = new Map();
+  const rev = new Map();
+  const nodeIds = new Set();
+  const edges = [];
+  for (const id of Object.keys(data)) {
+    const k = String(id);
+    nodeIds.add(k);
+    fwd.set(k, new Set());
+    rev.set(k, new Set());
+  }
+  for (const [id, n] of Object.entries(data)) {
+    const sid = String(id);
+    for (const out of Object.values(n.outputs || {})) {
+      for (const conn of (out.connections || [])) {
+        const tid = String(conn.node);
+        if (!nodeIds.has(tid)) continue;
+        fwd.get(sid).add(tid);
+        rev.get(tid).add(sid);
+        edges.push([sid, tid]);
+      }
+    }
+  }
+  return { fwd, rev, nodeIds, edges };
+}
+
+function bfsReach(start, adj) {
+  const reached = new Set();
+  const q = [start];
+  while (q.length) {
+    const x = q.shift();
+    for (const nxt of (adj.get(x) || [])) {
+      if (!reached.has(nxt)) { reached.add(nxt); q.push(nxt); }
+    }
+  }
+  return reached;
+}
+
+function clearPathClasses() {
+  document.querySelectorAll(".drawflow .drawflow-node")
+    .forEach(el => el.classList.remove("path-current", "path-up", "path-down", "path-dim", "cycle"));
+  document.querySelectorAll(".drawflow .connection")
+    .forEach(el => el.classList.remove("edge-up", "edge-down", "edge-dim", "edge-cycle"));
+}
+
+function refreshPathHighlight() {
+  clearPathClasses();
+  applyCycleHighlight();  // cycle decoration persists across selection changes
+  const id = state.selectedNodeId;
+  if (id == null) return;
+  const sid = String(id);
+  const { fwd, rev, nodeIds } = buildAdjacency();
+  if (!nodeIds.has(sid)) return;
+
+  const up = bfsReach(sid, rev);
+  const down = bfsReach(sid, fwd);
+  const lit = new Set([sid, ...up, ...down]);
+
+  for (const nid of nodeIds) {
+    const el = document.getElementById(`node-${nid}`);
+    if (!el) continue;
+    if (nid === sid) el.classList.add("path-current");
+    else if (up.has(nid)) el.classList.add("path-up");
+    else if (down.has(nid)) el.classList.add("path-down");
+    else el.classList.add("path-dim");
+  }
+
+  // Drawflow tags connection <svg>s with `node_in_node-T node_out_node-S`.
+  document.querySelectorAll(".drawflow .connection").forEach(svg => {
+    const cls = svg.className.baseVal || svg.getAttribute("class") || "";
+    const inMatch = cls.match(/node_in_node-(\S+)/);
+    const outMatch = cls.match(/node_out_node-(\S+)/);
+    if (!inMatch || !outMatch) return;
+    const t = inMatch[1], s = outMatch[1];
+    if (!lit.has(s) || !lit.has(t)) {
+      svg.classList.add("edge-dim");
+      return;
+    }
+    // Direction relative to selected: edges going *into* selected (or its ancestors) = up,
+    // edges going *out of* selected (or its descendants) = down.
+    if (down.has(t) || (s === sid && down.has(t))) svg.classList.add("edge-down");
+    else if (up.has(s) || (t === sid && up.has(s))) svg.classList.add("edge-up");
+  });
+}
+
+function applyCycleHighlight() {
+  const cycle = state.preview.cycle;
+  if (!cycle || cycle.length < 2) return;
+  const ring = new Set(cycle.map(String));
+  for (const nid of ring) {
+    const el = document.getElementById(`node-${nid}`);
+    if (el) el.classList.add("cycle");
+  }
+  // Edges where both endpoints sit on the ring and the edge follows ring order.
+  // Cheap heuristic: any edge with both endpoints in ring is suspect — mark it.
+  document.querySelectorAll(".drawflow .connection").forEach(svg => {
+    const cls = svg.className.baseVal || svg.getAttribute("class") || "";
+    const inMatch = cls.match(/node_in_node-(\S+)/);
+    const outMatch = cls.match(/node_out_node-(\S+)/);
+    if (!inMatch || !outMatch) return;
+    if (ring.has(inMatch[1]) && ring.has(outMatch[1])) {
+      svg.classList.add("edge-cycle");
+    }
+  });
+}
+
+function schedulePreviewRefresh() {
+  state.preview.dirty = true;
+  if (state.previewTimer) clearTimeout(state.previewTimer);
+  state.previewTimer = setTimeout(refreshPreview, PREVIEW_DEBOUNCE_MS);
+}
+
+async function refreshPreview() {
+  state.previewTimer = null;
+  if (!state.editor) return;
+  const flow = collectFlow();
+  const statusEl = $("#preview-status");
+  const warnEl = $("#preview-warn");
+  const bodyEl = $("#preview-body");
+  if (!flow.nodes.length) {
+    state.preview = { markdown: "", cycle: null, dirty: false };
+    if (statusEl) statusEl.textContent = "";
+    if (warnEl) { warnEl.classList.add("hidden"); warnEl.textContent = ""; }
+    if (bodyEl) { bodyEl.textContent = "Drop a node to start."; bodyEl.className = "muted small"; }
+    clearPathClasses();
+    if (state.selectedNodeId != null) refreshPathHighlight();
+    return;
+  }
+  try {
+    const r = await fetch("/api/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken || "" },
+      credentials: "same-origin",
+      body: JSON.stringify(flow),
+    });
+    // FIXED in F33 (was silent .catch(() => ({})) — see SKETCHY_CODE_AUDIT.md#s4-7)
+    let j = {};
+    try {
+      j = await r.json();
+    } catch {
+      const body = await r.text().catch(() => "");
+      showToast(`Preview error: ${r.status} ${r.statusText} — ${body.slice(0, 200)}`, "error");
+      return;
+    }
+    if (r.status === 409 && j.error === "cycle") {
+      state.preview = { markdown: "", cycle: j.cycle || [], dirty: false };
+      if (statusEl) statusEl.textContent = "cycle";
+      if (warnEl) {
+        warnEl.classList.remove("hidden");
+        warnEl.textContent = `Cycle detected: ${(j.cycle || []).join(" → ")}. Export blocked — break the cycle to continue.`;
+      }
+      if (bodyEl) { bodyEl.textContent = "(no preview while graph has a cycle)"; bodyEl.className = "muted small"; }
+    } else if (r.ok && j.ok) {
+      state.preview = { markdown: j.markdown, cycle: null, dirty: false };
+      if (statusEl) statusEl.textContent = `${j.steps} step${j.steps === 1 ? "" : "s"}`;
+      if (warnEl) { warnEl.classList.add("hidden"); warnEl.textContent = ""; }
+      if (bodyEl) { bodyEl.textContent = j.markdown; bodyEl.className = ""; }
+    } else {
+      state.preview = { markdown: "", cycle: null, dirty: false };
+      if (statusEl) statusEl.textContent = "error";
+      if (bodyEl) { bodyEl.textContent = `Preview error: ${j.message || r.statusText}`; bodyEl.className = "muted small"; }
+    }
+  } catch (e) {
+    if (bodyEl) { bodyEl.textContent = `Preview error: ${e.message}`; bodyEl.className = "muted small"; }
+  }
+  refreshPathHighlight();
+}
+
+function switchTab(tab) {
+  state.activeTab = tab;
+  const isNode = tab === "node";
+  $("#tab-node").classList.toggle("active", isNode);
+  $("#tab-node").setAttribute("aria-selected", isNode ? "true" : "false");
+  $("#tab-preview").classList.toggle("active", !isNode);
+  $("#tab-preview").setAttribute("aria-selected", !isNode ? "true" : "false");
+  $("#panel-node").classList.toggle("hidden", !isNode);
+  $("#panel-preview").classList.toggle("hidden", isNode);
+  if (!isNode && state.preview.dirty) refreshPreview();
 }
 
 function nodeHtml(tool, annotation = "") {
@@ -224,14 +465,18 @@ function selectNode(id) {
   if (!meta || !meta.tool) return;
   state.nodeMeta.set(String(id), meta);
   renderInspector(id, meta);
+  if (state.activeTab !== "node") switchTab("node");
+  refreshPathHighlight();
 }
 
 function clearInspector() {
   state.selectedNodeId = null;
   $("#inspector-sub").textContent = "Click a node";
   setSafeHTML($("#inspector-body"),
-    `<div class="empty-state"><div class="empty-glyph">◌</div><p>Select a node to set the prompt / annotation for that step.</p></div>`
+    `<div class="empty-state"><div class="empty-glyph">◌</div><p>Select a node to set the prompt / annotation for that step.</p><p class="muted small">Tip: click a node to highlight its upstream and downstream paths.</p></div>`
   );
+  clearPathClasses();
+  applyCycleHighlight();
 }
 
 function renderInspector(id, meta) {
@@ -276,6 +521,7 @@ function renderInspector(id, meta) {
         if (anno) anno.textContent = meta.annotation || "click to add prompt…";
       }
     }
+    schedulePreviewRefresh();
   });
   $("#del-node").addEventListener("click", () => state.editor.removeNodeId(`node-${id}`));
   $("#reveal-node").addEventListener("click", async () => {
@@ -329,12 +575,37 @@ async function saveFlow() {
 
 async function exportFlow() {
   if (!state.nodeMeta.size) { toast("Empty flow", "Drop at least one tool first", "error"); return; }
+  if (state.preview.cycle && state.preview.cycle.length) {
+    toast("Cycle blocks export",
+          `Break the cycle: ${state.preview.cycle.join(" → ")}`,
+          "error", 6000);
+    switchTab("preview");
+    return;
+  }
   try {
     await saveFlow();
     const flow = collectFlow();
-    const r = await api("/api/export", { method: "POST", body: flow });
-    toast("Skill registered", `${r.skill_slug} · ${r.steps} steps`, "success", 5000);
-    toast("Trigger ready", `Type /${r.trigger} in Claude Code (after restart)`, "info", 6000);
+    // /api/export inherits the same FlowCycleError → 409 path. Treat 409 specially
+    // so the message names the ring instead of dumping a raw 409 status.
+    const r = await fetch("/api/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken || "" },
+      credentials: "same-origin",
+      body: JSON.stringify(flow),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 409 && j.error === "cycle") {
+      state.preview.cycle = j.cycle || [];
+      applyCycleHighlight();
+      toast("Cycle blocks export",
+            `Break the cycle: ${(j.cycle || []).join(" → ")}`,
+            "error", 6000);
+      switchTab("preview");
+      return;
+    }
+    if (!r.ok || !j.ok) throw new Error(j.message || r.statusText);
+    toast("Skill registered", `${j.skill_slug} · ${j.steps} steps`, "success", 5000);
+    toast("Trigger ready", `Type /${j.trigger} in Claude Code (after restart)`, "info", 6000);
   } catch (e) { toast("Export failed", e.message, "error", 6000); }
 }
 
@@ -346,6 +617,8 @@ function newFlow() {
   $("#flow-trigger").value = "";
   $("#flow-desc").value = "";
   clearInspector();
+  state.preview = { markdown: "", cycle: null, dirty: false };
+  refreshPreview();
   toast("New flow", "Canvas cleared", "info", 2000);
 }
 
@@ -354,7 +627,10 @@ async function loadSavedFlows() {
     const r = await api("/api/flows");
     state.savedFlows = r.flows || [];
     renderSavedFlows();
-  } catch (e) { /* silent */ }
+  } catch (e) {
+    showToast("Failed to load saved flows: " + e.message, "error");
+    console.error(e);
+  }
 }
 
 function renderSavedFlows() {
@@ -420,9 +696,15 @@ function loadFlowIntoEditor(flow) {
     const a = idMap.get(String(e.source));
     const b = idMap.get(String(e.target));
     if (a && b) {
-      try { state.editor.addConnection(a, b, "output_1", "input_1"); } catch { /* ignore dup */ }
+      try {
+        state.editor.addConnection(a, b, "output_1", "input_1");
+      } catch (e) {
+        const isDup = /already exists|duplicate/i.test(e?.message || "");
+        if (!isDup) { showToast("Edge add failed: " + e.message, "warn"); console.error(e); }
+      }
     }
   }
+  schedulePreviewRefresh();
   toast("Loaded", `/${flow.trigger}`, "info", 2000);
 }
 
@@ -439,8 +721,15 @@ function wireAppBar() {
     if (!trig.dataset.touched) {
       trig.value = "toolforge-" + e.target.value.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
     }
+    schedulePreviewRefresh();
   });
-  $("#flow-trigger").addEventListener("input", e => { e.target.dataset.touched = "1"; });
+  $("#flow-trigger").addEventListener("input", e => {
+    e.target.dataset.touched = "1";
+    schedulePreviewRefresh();
+  });
+  $("#flow-desc").addEventListener("input", () => schedulePreviewRefresh());
+  $("#tab-node").addEventListener("click", () => switchTab("node"));
+  $("#tab-preview").addEventListener("click", () => switchTab("preview"));
   document.addEventListener("keydown", e => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
       e.preventDefault(); saveFlow();
@@ -451,6 +740,12 @@ function wireAppBar() {
 async function boot() {
   initEditor();
   wireAppBar();
+  try {
+    await loadCsrfToken();
+  } catch (e) {
+    toast("CSRF bootstrap failed", e.message, "error", 6000);
+    return;
+  }
   await Promise.all([loadInventory(), loadSavedFlows()]);
 }
 

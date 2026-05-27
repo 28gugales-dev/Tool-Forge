@@ -52,25 +52,67 @@ Entries fall into three types; format each accordingly:
 
 ## Step 3: Offer install (interactive consent in chat)
 
-Ask the user in chat: "Which one would you like to install? Type 1 to 5, or n to skip. (Entries marked `[installed]` are already on your machine and will be skipped.)"
+Ask the user: "Which to install? Type a number (1-5), a comma list (1,3,4), `all`, or `n`. (Entries marked `[installed]` are already on your machine and will be skipped automatically.)"
 
-If the user picks an installed entry, respond: `<name> is already installed. Try running /toolforge <category> again and pick a non-installed entry, or use /toolforge-rate <1-5> if you already have a rating to give.`
+If the user picks **only** installed entries, respond: `Already installed. Try /toolforge <category> again and pick non-installed entries, or /toolforge-rate <1-5> to record a rating.`
 
-When the user picks a non-installed number, you (Claude) have their confirmation. Pass `--yes` to the installer because the subprocess has no tty. Use the Bash tool with each positional argument fully quoted (do not interpolate raw user-controlled strings into a shell command):
+For non-installed picks, you (Claude) have consent. **Always pass `--yes`** (subprocess has no tty). Route by pick count:
+
+### Step 3-pre: Security-review handoff (web picks only)
+
+Before any web-discovered install runs, dispatch the security subagent. For local-source picks (`source` starts with `installed-…` or `local-repo:`), skip this — they live under user-trusted paths.
+
+For each web pick:
+
+1. Build the prompt:
+   ```
+   PROMPT=$(python "${CLAUDE_PLUGIN_ROOT}/bin/toolforge_security_handoff.py" prompt "<source_url>" "<tool_name>")
+   ```
+2. Call the Task tool with `subagent_type: general-purpose` and the captured `$PROMPT` as the prompt. The subagent uses WebFetch (allow-list locked) to read the repo, scans for malware, optionally proposes fixes, and returns a single-line JSON verdict.
+3. Parse the verdict from the subagent's final message:
+   - `clean` → proceed to Step 3a/3b.
+   - `suspect` → show the user the `summary` + first 3 findings; ask `Install anyway? [y/N]`. Default no. Only proceed on explicit yes.
+   - `malicious` → REFUSE; do NOT call the installer; surface the findings.
+
+If the user picks multiple tools in one batch, run the handoff subagents IN PARALLEL (single tool-use block with N Task calls).
+
+### Step 3a: Single pick → single shellout
 
 ```
-python "${CLAUDE_PLUGIN_ROOT}/bin/toolforge_install.py" "<tool_name>" "<install_command>" "$ARGUMENTS" --yes
+python "${CLAUDE_PLUGIN_ROOT}/bin/toolforge_install.py" "<tool_name>" "<install_command>" "<category-lower>" --yes
 ```
 
-`toolforge_install.py` will:
+Quote each positional. Lowercase the category (DB regex `^[a-z]{1,32}$`).
+
+### Step 3b: Multi-pick (`1,3,4` or `all`) → BATCH MODE: one permission prompt, one shellout
+
+Build a JSON array of the picked non-installed tools and pipe to `--batch`. ONE Bash call → ONE permission prompt → all commands validated up-front (fail-fast — if any one is rejected, the WHOLE batch aborts with exit 2 before anything runs) → sequential execution with per-tool stdout/stderr forwarded and per-tool audit log. Use a heredoc so install_command strings never need shell re-escaping:
+
+```
+python "${CLAUDE_PLUGIN_ROOT}/bin/toolforge_install.py" --batch --yes <<'EOF'
+[
+  {"tool_name": "mcp-ui",            "install_command": "npm install @mcp-ui/server",                     "category": "ui"},
+  {"tool_name": "magic-mcp",         "install_command": "claude mcp add magic -- npx -y @magicuidesign/mcp", "category": "ui"},
+  {"tool_name": "aceternity-ui-mcp", "install_command": "claude mcp add aceternity -- npx -y aceternityui-mcp", "category": "ui"}
+]
+EOF
+```
+
+Rules for building the JSON:
+- Lowercase the category.
+- Cross-check installed state (`claude mcp list`, `claude plugin list`, etc.) BEFORE building. Skip any tool already installed — do not put a redundant install in the batch.
+- If the user typed `all`, expand to the non-installed subset (not the literal top-5).
+- Batch exit codes: 0 all ok, 2 validation refused (none ran) or user said no, 3 audit-log drop on success path, 4 any child install exited nonzero. Forward stderr verbatim.
+
+### What the installer enforces (single OR batch)
 
 - Refuse any command containing shell metacharacters (`;`, `&`, `|`, backtick, `<`, `>`, newlines).
-- `shlex.split` and require `argv[0]` in the allow-list (`claude`, `npx`, `uvx`, `npm`, `pip`, `pipx`, `uv`).
-- Resolve the executable via `shutil.which` so Windows .cmd shims are found.
-- Run with `shell=False`.
-- Log success or refusal to SQLite.
+- `shlex.split` and require `argv[0]` in allow-list (`claude`, `npx`, `uvx`, `npm`, `pip`, `pipx`, `uv`).
+- Resolve via `shutil.which`; reject user-writable PATH dirs (`~/.local/bin`, `%LOCALAPPDATA%`, `~/AppData/Roaming/npm`) and `node_modules/.bin`.
+- Run with `shell=False`, `capture_output=True`.
+- Log per-tool success or refusal to SQLite.
 
-If the script exits non-zero, surface the stderr to the user verbatim.
+The semantic security gate (malware scan) lives in the curator skill's Step 3-pre handoff, NOT inside the installer. The installer is the syntactic boundary; the handoff is the semantic one.
 
 ## Step 4: Remind the user to rate
 

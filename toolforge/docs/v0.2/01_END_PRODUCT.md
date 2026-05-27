@@ -26,7 +26,7 @@ What "done" looks like at each version. Use this as the **scope guardrail**: any
 | # | Metric | Target | How to measure |
 |---|--------|--------|----------------|
 | M0 | **`[CRITIQUE]` Hand-label gate** | ≥12/20 prompts show a missed-skill trigger | 3hr manual exercise; output saved to `~/.gstack/projects/Tool-Forge/handlabel-results-*.md`. **If <8/20 → v0.2 thesis fails, pivot.** |
-| M1 | Skill-fire rate in routed sessions (post-active) | ≥5% of `tool_use` blocks (vs 0.2% pre-router) | Re-run `bin/toolforge_dumb_scanner.py` on 7d of post-active-mode transcripts; compare to baseline |
+| M1 | Skill-fire rate in routed sessions (post-active) | ≥5% of `tool_use` blocks (vs 0.2% pre-router) | Re-run `bin/toolforge_usage_detector.py` on 7d of post-active-mode transcripts; compare to baseline |
 | M2 | Router latency p95 | <80ms per user prompt | Inline timer in hook, dumped to `~/.claude/toolforge_router.log` |
 | M3 | False-positive rate (in shadow mode, gating active mode) | <15% over 7d of shadow data | Manual label of 50 shadow-log decisions before flipping `router_mode: active` |
 | M4 | Self-install round-trip | 1 user click → tool registered, smoke-tested, ready on restart | Manual: 5 fresh installs of MCPs across categories; verify_install confirms |

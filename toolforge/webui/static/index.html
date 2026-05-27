@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>ToolForge · Flow Studio</title>
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/drawflow@0.0.59/dist/drawflow.min.css" />
+<link rel="stylesheet" href="/static/vendor/drawflow.min.css" />
 <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
@@ -26,8 +26,19 @@
 </header>
 
 <main class="grid">
-  <aside class="pane inventory">
+  <div class="resize-handle" data-side="left" role="separator" aria-orientation="vertical"
+       aria-controls="pane-inventory" aria-label="Resize left panel"
+       aria-valuemin="200" aria-valuemax="520" aria-valuenow="320" tabindex="0"
+       title="Drag to resize · double-click to reset"></div>
+  <div class="resize-handle" data-side="right" role="separator" aria-orientation="vertical"
+       aria-controls="pane-inspector" aria-label="Resize right panel"
+       aria-valuemin="240" aria-valuemax="560" aria-valuenow="340" tabindex="0"
+       title="Drag to resize · double-click to reset"></div>
+  <aside class="pane inventory" id="pane-inventory">
     <div class="pane-head">
+      <button class="btn icon collapse-toggle collapse-left" id="collapse-left" type="button"
+              aria-expanded="true" aria-controls="pane-inventory" aria-label="Collapse left panel"
+              title="Collapse (Ctrl+\)">«</button>
       <input id="search" type="search" placeholder="Search 200+ tools…" autocomplete="off" />
       <div class="filter-chips" id="type-chips"></div>
       <div class="filter-chips muted" id="cat-chips"></div>
@@ -53,16 +64,37 @@
     </div>
   </section>
 
-  <aside class="pane inspector">
+  <aside class="pane inspector" id="pane-inspector">
     <div class="pane-head">
-      <strong>Inspector</strong>
-      <span class="muted small" id="inspector-sub">Click a node</span>
-    </div>
-    <div class="inspector-body" id="inspector-body">
-      <div class="empty-state">
-        <div class="empty-glyph">◌</div>
-        <p>Select a node to set the prompt / annotation for that step.</p>
+      <button class="btn icon collapse-toggle collapse-right" id="collapse-right" type="button"
+              aria-expanded="true" aria-controls="pane-inspector" aria-label="Collapse right panel"
+              title="Collapse (Ctrl+Shift+\)">»</button>
+      <div class="tabs" role="tablist" aria-label="Inspector tabs">
+        <button class="tab active" id="tab-node" type="button" role="tab"
+                aria-selected="true" aria-controls="panel-node">Node</button>
+        <button class="tab" id="tab-preview" type="button" role="tab"
+                aria-selected="false" aria-controls="panel-preview">Skill preview</button>
       </div>
+      <span class="muted small tab-sub" id="inspector-sub">Click a node</span>
+    </div>
+
+    <div class="tab-panel" id="panel-node" role="tabpanel" aria-labelledby="tab-node">
+      <div class="inspector-body" id="inspector-body">
+        <div class="empty-state">
+          <div class="empty-glyph">◌</div>
+          <p>Select a node to set the prompt / annotation for that step.</p>
+          <p class="muted small">Tip: click a node to highlight its upstream and downstream paths.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-panel hidden" id="panel-preview" role="tabpanel" aria-labelledby="tab-preview">
+      <div class="preview-meta">
+        <span class="muted small">Live render of the <code>SKILL.md</code> that <strong>Export</strong> writes.</span>
+        <span class="preview-status" id="preview-status"></span>
+      </div>
+      <div class="preview-warn hidden" id="preview-warn"></div>
+      <pre class="preview-body"><code id="preview-body" class="muted small">Drop a node to start.</code></pre>
     </div>
 
     <div class="pane-head">
@@ -75,7 +107,8 @@
 
 <div id="toast-stack" class="toast-stack"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/drawflow@0.0.59/dist/drawflow.min.js"></script>
+<script src="/static/vendor/drawflow.min.js"></script>
 <script src="/static/app.js" type="module"></script>
+<script src="/static/sidebar-collapse.js" type="module"></script>
 </body>
 </html>

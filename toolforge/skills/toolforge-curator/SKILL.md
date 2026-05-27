@@ -1,7 +1,7 @@
 ---
 name: toolforge-curator
-description: Activate this skill ONLY when the user runs `/toolforge <category>` or explicitly asks to "discover", "find", "install new", or "rank" Claude Code plugins / MCP servers / skills for a specific domain (UI, backend, database, testing, devops). Performs live web discovery via WebSearch + WebFetch (allow-list locked to 7 hosts: github.com, raw.githubusercontent.com, claudemarketplaces.com, modelcontextprotocol.io, aitmpl.com, npmjs.com, www.npmjs.com), enforces the allow-list with bin/toolforge_validate_url.py, applies a Bayesian-shrunk composite ranking blending stars, recency, and historical Likert ratings from SQLite, and returns the top 5 with install commands. Skip this skill for general questions about installed tools, configuration changes, or read-only inspection. Only fire on explicit discovery requests. Now also surfaces locally-installed plugins/MCPs and user-configured local reference repos (via `~/.claude/toolforge-config.json`) alongside live web results, with an `[installed]` badge for already-installed entries.
-version: 0.3.0
+description: Activate this skill ONLY when the user runs `/toolforge <category>` or explicitly asks to "discover", "find", "install new", or "rank" Claude Code plugins / MCP servers / skills for a specific domain (UI, backend, database, testing, devops). Performs live web discovery via WebSearch + WebFetch (allow-list locked to 7 hosts: github.com, raw.githubusercontent.com, claudemarketplaces.com, modelcontextprotocol.io, aitmpl.com, npmjs.com, www.npmjs.com), enforces the allow-list with bin/toolforge_validate_url.py, applies a Bayesian-shrunk composite ranking blending stars, recency, and historical Likert ratings from SQLite, and returns the top 5 with install commands. Skip this skill for general questions about installed tools, configuration changes, or read-only inspection. Only fire on explicit discovery requests. Surfaces locally-installed plugins/MCPs and user-configured local reference repos (via `~/.claude/toolforge-config.json`) alongside live web results, with an `[installed]` badge for already-installed entries. After the user picks a web-discovered tool to install, the skill dispatches a Task subagent (security-review handoff) to scan the repo for malware and propose fixes before the install command runs; malicious verdicts block the install, suspect verdicts require explicit user opt-in.
+version: 0.4.0
 ---
 
 # ToolForge Curator
@@ -62,7 +62,7 @@ For every candidate URL (web only, local-scan entries skip this step), shell out
 python "${CLAUDE_PLUGIN_ROOT}/bin/toolforge_validate_url.py" "<url>"
 ```
 
-The validator exits 0 if the host is in the allow-list (`github.com`, `raw.githubusercontent.com`, `claudemarketplaces.com`, `modelcontextprotocol.io`, `aitmpl.com`, `npmjs.com`) and exits 1 otherwise. Drop any URL that fails. This is the security boundary. Do not skip it. Do not infer "this looks safe" and bypass.
+The validator exits 0 if the host is in the allow-list (`github.com`, `raw.githubusercontent.com`, `claudemarketplaces.com`, `modelcontextprotocol.io`, `aitmpl.com`, `npmjs.com`, `www.npmjs.com`) and exits 1 otherwise. Drop any URL that fails. This is the security boundary. Do not skip it. Do not infer "this looks safe" and bypass.
 
 ### 3. WebFetch the top 3 to 5 surviving URLs
 
@@ -142,6 +142,8 @@ Worked numbers (Bayesian Likert, applies to both branches):
 
 Unrated tools rank cleanly between "actively disliked" and "moderately liked" instead of beating actively-disliked tools as in the old naive scheme.
 
+The inventory webui surfaces the same prior=0.6 when n=0 (see `toolforge/webui/inventory.py:_attach_ratings`); curator and UI MUST agree on the unrated case, otherwise the Bayesian ranking thesis loses credibility.
+
 ### 7. Fallback path
 
 Local-scan results count toward the "valid candidates" total. If web returns 0 valid candidates but the local scan returns 4 and partial-merge tops up 1 from `fallback/{category}.json`, that totals 5 valid and FULL fallback does NOT fire.
@@ -153,13 +155,13 @@ Trigger conditions:
 - Total wall clock exceeds 10 seconds → FULL fallback.
 - 1 to 4 combined valid candidates (web + local) → PARTIAL MERGE: keep all live + local candidates, top up with the highest-scored entries from `fallback/{category}.json` (de-duped by lowercase name) until you have 5. This preserves real fresh signal instead of discarding it.
 
-**Integrity check (HARD GATE, runs BEFORE any fallback JSON is loaded)**: shell out:
+**Integrity check (HARD GATE, runs BEFORE any fallback JSON is loaded)**: run the gate as code (do NOT skip, do NOT replace with an inline hash command — the script is the trust boundary, not the model's reading of its output):
 
 ```
-sha256sum -c "${CLAUDE_PLUGIN_ROOT}/fallback/manifest.sha256" 2>&1 | grep -v "^$" | head -20
+python "${CLAUDE_PLUGIN_ROOT}/bin/toolforge_verify_fallback.py" "${CLAUDE_PLUGIN_ROOT}/fallback/manifest.sha256"
 ```
 
-Windows note: if `sha256sum` is unavailable, fall back per file to `python -c "import hashlib; print(hashlib.sha256(open(r'<path>','rb').read()).hexdigest())"` and compare against the matching line in `manifest.sha256`. If ANY file mismatches (any line not ending in `OK`, or any computed hash differing from the manifest), REFUSE to load the fallback and tell the user: "Fallback integrity check failed for {file}. Refusing to load potentially-tampered install commands. Aborting." Do NOT silently proceed. This blocks a malicious PR landing a poisoned install command from being silently executed on first fallback fire.
+The script exits 0 and prints `OK` on success; exits 2 on any hash mismatch; exits 3 on missing manifest or missing referenced file; exits 1 on usage error. Cross-platform (stdlib `hashlib`); no `sha256sum` dependency. If the exit code is anything other than 0, ABORT the fallback path, surface the stderr line verbatim to the user (it names the offending file and both hashes), and tell them: "Fallback integrity check failed. Refusing to load potentially-tampered install commands. Aborting." Never load the fallback JSON without an `OK` from this gate — this blocks a malicious PR landing a poisoned install command from being silently executed on first fallback fire.
 
 When the fallback fires (after integrity check passes):
 - Full: tell the user "Live discovery unavailable, falling back to cached results."
@@ -266,3 +268,26 @@ Top 5 tools for UI:
 - One bulk DB call per invocation. Not N.
 - Fail to fallback rather than fail to a partial list. Merge live + fallback when partial.
 - Do not invoke this skill for generic prompts that incidentally mention "tools" or "plugins". Only on explicit `/toolforge` or discovery verbs.
+
+## Step 9: Security-review handoff (runs AFTER user picks, BEFORE install)
+
+When the user picks a WEB-discovered tool (`source_url` starts with `https://github.com/...` or `https://raw.githubusercontent.com/...`), do this BEFORE shelling out to `toolforge_install.py`:
+
+1. Build the review prompt:
+   ```
+   python "${CLAUDE_PLUGIN_ROOT}/bin/toolforge_security_handoff.py" prompt "<source_url>" "<tool_name>"
+   ```
+   The script validates the URL through the allow-list and prints the prompt body to stdout. Capture that string.
+
+2. Dispatch a Task subagent with `subagent_type: general-purpose`, passing the captured string as the prompt. The subagent fetches files via WebFetch (allow-list locked to github.com / raw.githubusercontent.com), scans for malware, optionally proposes fixes, and returns a single-line JSON verdict on its last message.
+
+3. Parse the JSON verdict (`{"verdict": "clean"|"suspect"|"malicious", "confidence": ..., "findings": [...], "summary": "..."}`).
+
+4. Decision:
+   - **`clean`**: proceed to install (Step 3a/3b in the command markdown).
+   - **`suspect`**: show the user the `summary` + first 3 findings, ask "Install anyway? [y/N]". Default no. Only proceed on explicit yes.
+   - **`malicious`**: REFUSE install. Tell the user `Refusing to install <tool> — security review flagged: <summary>. See findings: ...`. Do not call the installer.
+
+5. Skip this step for local-source picks (`source` starts with `installed-…` or `local-repo:`). Those are under user-trusted paths and don't need network fetch review.
+
+Trust note: this is a conversational gate, not a Python-enforced one. The installer's hard boundary is its argv allow-list (no shell metachars, allow-listed first token, no user-writable executable paths). The handoff adds a semantic layer for catching malicious-but-syntactically-valid install targets — it's belt + suspenders.

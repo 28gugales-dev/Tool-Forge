@@ -12,7 +12,7 @@ State as of 2026-05-25, after 5 commits landed this session. See `git log` for h
 |--------|------|--------|
 | `f98c607` | v0.1 initial release (curator skill, installer, ratings, fallback, demo, webui) | `git tag` shows v0.1.0 |
 | `087d6f3` | Local-source scanner + curator v0.3.0 bump | `bin/toolforge_local_scan.py --self-test` |
-| `99f5cb4` | **Day-1 dumb scanner — validated 79% dead-rate thesis empirically** | Re-run: `python toolforge/bin/toolforge_dumb_scanner.py --days 30` |
+| `99f5cb4` | **Day-1 scanner — validated 79% dead-rate thesis empirically** (superseded by `usage_detector`) | Re-run: `python toolforge/bin/toolforge_usage_detector.py --days 30` |
 | `4883880` | DB schema v2 (usage_stats + deprecations + routing_scores) + helpers | `python toolforge/bin/toolforge_db.py --self-test` → 9/9 |
 | `bd02c44` | Productionized usage_detector with DB persist + caps | `python toolforge/bin/toolforge_usage_detector.py --self-test` → 10/10 |
 | `c29adb4` | Inventory curator port + JSONL contract tests (17 passing) | `python toolforge/tests/test_usage_detector_contract.py` → 17/17 |

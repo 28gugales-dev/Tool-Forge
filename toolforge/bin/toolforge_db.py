@@ -22,7 +22,10 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 
+# ---------- section: constants ----------
+
 DB_PATH = Path(os.path.expanduser("~/.claude/toolforge.db"))
+# Canonical decay half-life. Imported by toolforge_local_scan.py and webui/inventory.py.
 DECAY_HALFLIFE_DAYS = 75.0  # AI tooling moves fast — was 180d, cut to ~2.5mo
 SCHEMA_VERSION = 2
 BAYES_PRIOR_MEAN = 3.0
@@ -31,15 +34,18 @@ BAYES_PRIOR_WEIGHT = 5.0
 TOOL_NAME_RE = re.compile(r"^[a-z0-9._@/-]{1,80}$")
 TOOL_KEY_RE = re.compile(r"^[a-z]+:[a-z0-9._@/-]{1,80}$")
 CATEGORY_RE = re.compile(r"^[a-z]{1,32}$")
-URL_RE = re.compile(r"^https?://[A-Za-z0-9.\-/_:?&=%@~+]{4,2048}$")
+URL_RE = re.compile(r"^https?://[A-Za-z0-9.\-/_:?&=%@~#+,]{4,2048}$")
 
-_session_count_had_error = False
+# WARN: see SKETCHY_CODE_AUDIT.md#s3-7 — FIXED in F23 (had_error now returned via tuple from _current_session_count / status).
 
 
 def _validate_category(cat: str) -> str:
     if not CATEGORY_RE.match(cat):
         raise ValueError(f"invalid category {cat!r}: must match {CATEGORY_RE.pattern}")
     return cat
+
+
+# ---------- section: connection-helpers ----------
 
 
 def _connect() -> sqlite3.Connection:
@@ -51,6 +57,7 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+# WARN: see SKETCHY_CODE_AUDIT.md#s3-5 — FIXED in F21 (kept as distinct symbol; toolforge_db._normalize differs from canonical _normalize_name by design — strips+lowers without separator substitution).
 def _normalize(name: str) -> str:
     return name.strip().lower()
 
@@ -75,6 +82,9 @@ def _validate_url(url: str) -> str:
     if not URL_RE.match(u):
         raise ValueError(f"invalid url {url!r}: must match {URL_RE.pattern}")
     return u
+
+
+# ---------- section: schema-init ----------
 
 
 def init_db() -> None:
@@ -135,6 +145,9 @@ def init_db() -> None:
         conn.close()
 
 
+# ---------- section: installs-table ----------
+
+
 def log_install(tool_name: str, category: str, approved: bool) -> None:
     name = _validate_tool_name(tool_name)
     _validate_category(category)
@@ -148,6 +161,9 @@ def log_install(tool_name: str, category: str, approved: bool) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+# ---------- section: ratings-table ----------
 
 
 def log_rating(tool_name: str, rating: int) -> None:
@@ -203,7 +219,8 @@ def get_rating_stats(tool_name: str) -> dict:
 
 
 def get_rating_stats_bulk(names: list[str]) -> dict:
-    """Single-connection, single-query bulk lookup. O(1) round trips, not O(N)."""
+    # WARN: see SKETCHY_CODE_AUDIT.md#s5-8 — FIXED in F45 (docstring no longer claims O(1) total work).
+    """Single-connection, single-query bulk lookup. Single round-trip; N is the SQL IN-list size, not the number of network hops. SQL is O(N)."""
     init_db()
     result = {n: {"sum": 0, "n": 0, "avg": None, "decayed_avg": None} for n in names}
     if not names:
@@ -242,7 +259,7 @@ def get_avg_rating(tool_name: str) -> Optional[float]:
     return get_rating_stats(tool_name)["avg"]
 
 
-# ---------- v2: usage_stats helpers ----------
+# ---------- section: usage-stats-v2 ----------
 
 def upsert_usage_stats(tool_key: str, count_30d: int, last_used_at: Optional[str]) -> None:
     key = _validate_tool_key(tool_key)
@@ -293,7 +310,7 @@ def get_usage_stats_bulk(keys: list[str]) -> dict:
     return result
 
 
-# ---------- v2: deprecations helpers ----------
+# ---------- section: deprecations-v2 ----------
 
 def upsert_deprecation(source_url: str, tool_name: str, archived: bool, last_push_at: Optional[str]) -> None:
     url = _validate_url(source_url)
@@ -338,7 +355,7 @@ def get_deprecation(source_url: str) -> Optional[dict]:
     }
 
 
-# ---------- v2: routing_scores helpers ----------
+# ---------- section: routing-v2 ----------
 
 def upsert_routing_score(
     tool_key: str,
@@ -406,6 +423,9 @@ def get_routing_scores_bulk(keys: list[str]) -> dict:
     return result
 
 
+# ---------- section: cli-entry-points ----------
+
+
 def get_last_installed_tool() -> Optional[str]:
     init_db()
     conn = _connect()
@@ -442,18 +462,16 @@ def _session_counter_path(session_id: str) -> Path:
     return Path(tempfile.gettempdir()) / f"toolforge_session_{safe}.count"
 
 
-def _current_session_count() -> tuple[Optional[int], str]:
-    """Returns (count, source_label). Count is None when session id unknown."""
-    global _session_count_had_error
+def _current_session_count() -> tuple[Optional[int], str, bool]:
+    """Returns (count, source_label, had_error). Count is None when session id unknown."""
     sid = os.environ.get("CLAUDE_SESSION_ID")
     if not sid:
-        return None, "no CLAUDE_SESSION_ID in env"
+        return None, "no CLAUDE_SESSION_ID in env", False
     path = _session_counter_path(sid)
     try:
-        return (path.stat().st_size if path.exists() else 0), str(path)
+        return (path.stat().st_size if path.exists() else 0), str(path), False
     except OSError as exc:
-        _session_count_had_error = True
-        return None, f"stat failed: {exc}"
+        return None, f"stat failed: {exc}", True
 
 
 def _shrunk_score(stats: dict) -> float:
@@ -464,18 +482,23 @@ def _shrunk_score(stats: dict) -> float:
     return (stats["decayed_avg"] * n + BAYES_PRIOR_MEAN * BAYES_PRIOR_WEIGHT) / (n + BAYES_PRIOR_WEIGHT)
 
 
-def status() -> str:
+def status() -> tuple[str, bool]:
+    # WARN: see SKETCHY_CODE_AUDIT.md#s5-2 — FIXED in F39 (sprint tag dropped from db.py).
+    # reset latch each call so a transient stat() failure doesn't permanently mark the process as errored (long-lived importers like webui/inventory.py call this repeatedly).
     init_db()
     conn = _connect()
     try:
         total = conn.execute(
             "SELECT COUNT(*) FROM installs WHERE approved = 1"
         ).fetchone()[0]
+        # WARN: see SKETCHY_CODE_AUDIT.md#s1-or-s4 — FIXED in F48 (capped to 365 days below).
+        # Cap at 365 days — status() is a human-readable summary, not a full export.
         rows = conn.execute(
             """
             SELECT tool_name, rating,
                    julianday('now') - julianday(rated_at, 'utc') AS age_days
             FROM ratings
+            WHERE julianday('now') - julianday(rated_at, 'utc') <= 365
             """
         ).fetchall()
         last = conn.execute(
@@ -495,7 +518,7 @@ def status() -> str:
     scored.sort(key=lambda x: (-x[1], -x[2]["n"]))
     top = scored[:5]
 
-    sess_count, sess_src = _current_session_count()
+    sess_count, sess_src, had_error = _current_session_count()
     sess_disp = f"{sess_count}" if sess_count is not None else f"unknown ({sess_src})"
 
     lines = ["================ ToolForge Status ================",
@@ -518,13 +541,14 @@ def status() -> str:
         for name, rating, when in last:
             lines.append(f"  {when}  {name:30s}  {rating}/5")
     lines.append("==================================================")
-    return "\n".join(lines)
+    return "\n".join(lines), had_error
 
 
 def _self_test() -> int:
+    # WARN: see SKETCHY_CODE_AUDIT.md#s5-3 — FIXED in F40 (stale env-var line removed from docstring).
     """Smoke test that exercises v1 + v2 schema against a temp DB.
 
-    Does NOT touch ~/.claude/toolforge.db. Override via TOOLFORGE_DB env var.
+    Does NOT touch ~/.claude/toolforge.db.
     """
     global DB_PATH
     saved = DB_PATH
@@ -699,9 +723,9 @@ def main(argv: list[str]) -> int:
             print(msg)
             return code
         if cmd == "status":
-            out = status()
+            out, had_error = status()
             print(out)
-            if _session_count_had_error:
+            if had_error:
                 return 3
             return 0
         if cmd == "upsert_usage":

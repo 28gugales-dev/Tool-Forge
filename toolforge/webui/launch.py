@@ -18,7 +18,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SERVER = HERE / "server.py"
-DEFAULT_PORT_RANGE = range(7321, 7371)
+# WARN: see SKETCHY_CODE_AUDIT.md#s3-6 — FIXED in F22 (imported from server.py; no longer a local literal).
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+from server import DEFAULT_PORT_RANGE  # noqa: E402
 
 
 def _is_up(port: int) -> bool:

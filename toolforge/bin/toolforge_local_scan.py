@@ -25,10 +25,11 @@ Security boundaries:
   - No symlink follow.
   - Per-file read cap: 4 KiB (descriptions live in frontmatter / first lines).
   - Hard cap on files scanned: 2000.
-  - Subprocess: only `claude plugin list` and `claude mcp list`, shell=False.
+  - Subprocess: `claude plugin list`, `claude mcp list`, `git log -1 --format=%ct` — all shell=False with explicit timeouts.
   - Path traversal: configured paths are resolved + canonicalized; entries that escape
     the resolved root (via .. or symlink) are dropped.
 """
+# WARN: see SKETCHY_CODE_AUDIT.md#s5-7 — FIXED in F44 (git log subprocess now named in docstring).
 
 from __future__ import annotations
 
@@ -44,22 +45,29 @@ import time
 from pathlib import Path
 from typing import Optional
 
+# Sibling bin/ import — script-dir is on sys.path when invoked as `python toolforge_local_scan.py`.
+from toolforge_db import DECAY_HALFLIFE_DAYS
+from toolforge_usage_detector import _normalize_name  # noqa: F401  # re-exported for legacy callers
+
+# ---------- section: constants ----------
 CACHE_TTL_SECONDS = 300
 MAX_FILES_SCANNED = 2000
 MAX_FILE_READ_BYTES = 4096
 MAX_DEPTH = 4
 LOCAL_STARS_NORM = 0.4
-DECAY_HALFLIFE_DAYS = 75.0  # AI tooling moves fast — was 180d, cut to ~2.5mo
+# WARN: see SKETCHY_CODE_AUDIT.md#s3-1 — FIXED in F17 (DECAY_HALFLIFE_DAYS imported from toolforge_db).
 RECENCY_SECONDS_PER_DAY = 86400.0
 MIN_CATEGORY_SCORE = 0.3
 MAX_LOCAL_PER_CATEGORY = 10
 SCAN_BUDGET_SECONDS = 8.0
-SUBPROCESS_TIMEOUT_SECONDS = 4.0
-CLAUDE_LIST_TIMEOUT_SECONDS = 10.0
+# WARN: see SKETCHY_CODE_AUDIT.md#s6-1 — FIXED in F37 (code now matches ARCHITECTURE.md §4.5/§5.4: 5s for claude list, 2s for git log).
+GIT_LOG_TIMEOUT_SECONDS = 2.0
+CLAUDE_LIST_TIMEOUT_SECONDS = 5.0
 DESCRIPTION_MAX_CHARS = 200
 
 CONFIG_PATH = Path(os.path.expanduser("~/.claude/toolforge-config.json"))
 
+# WARN: see SKETCHY_CODE_AUDIT.md#s3-2 — FIXED in F18 (canonical source; imported by webui/inventory.py).
 CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "ui": [
         "ui", "frontend", "react", "vue", "svelte", "component", "css",
@@ -95,22 +103,34 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
 
 SUPPORTED_CATEGORIES = frozenset(CATEGORY_KEYWORDS.keys())
 TOOL_NAME_RE = re.compile(r"^[a-z0-9._@/-]{1,80}$")
+# WARN: NEW — SAFE_NAME_RE is unused after F21 (canonical _normalize_name imported from toolforge_usage_detector). Safe to remove in a follow-up.
 SAFE_NAME_RE = re.compile(r"[^a-z0-9._@/-]+")
 
 FRONTMATTER_NAME_RE = re.compile(r"^name:\s*(.+?)\s*$", re.MULTILINE)
 FRONTMATTER_DESCRIPTION_RE = re.compile(r"^description:\s*(.+?)\s*$", re.MULTILINE)
 
 
+# ---------- section: config-loader ----------
 def _load_config() -> dict:
-    if not CONFIG_PATH.exists():
+    path = CONFIG_PATH
+    if not path.exists():
         return {}
     try:
-        raw = CONFIG_PATH.read_text(encoding="utf-8", errors="replace")
+        raw = path.read_text(encoding="utf-8", errors="replace")
         data = json.loads(raw)
         if not isinstance(data, dict):
             return {}
         return data
-    except (OSError, json.JSONDecodeError) as exc:
+    # WARN: see SKETCHY_CODE_AUDIT.md#s4-1 — FIXED in F25 (corrupt config quarantined like _load_cache does).
+    except json.JSONDecodeError as exc:
+        quarantine = path.with_suffix(f".corrupt.{int(time.time())}")
+        try:
+            path.rename(quarantine)
+        except OSError:
+            pass
+        print(f"toolforge_local_scan: corrupt config quarantined to {quarantine}: {exc}", file=sys.stderr)
+        return {}
+    except OSError as exc:
         print(f"toolforge_local_scan: config unreadable, using defaults: {exc}", file=sys.stderr)
         return {}
 
@@ -149,9 +169,8 @@ def _resolved_local_paths() -> list[Path]:
     return resolved
 
 
-def _normalize_name(raw: str) -> str:
-    n = SAFE_NAME_RE.sub("-", raw.strip().lower()).strip("-")
-    return n[:80] if n else ""
+# ---------- section: metadata-extractors ----------
+# WARN: see SKETCHY_CODE_AUDIT.md#s3-5 — FIXED in F21 (canonical _normalize_name imported from toolforge_usage_detector at module top).
 
 
 def _truncate_desc(text: str) -> str:
@@ -169,6 +188,7 @@ def _read_capped(path: Path) -> str:
         return ""
 
 
+# WARN: see SKETCHY_CODE_AUDIT.md#s3-4 — FIXED in F20 (canonical source; imported by webui/inventory.py).
 def _parse_frontmatter(text: str) -> dict[str, str]:
     if not text.startswith("---"):
         return {}
@@ -186,6 +206,7 @@ def _parse_frontmatter(text: str) -> dict[str, str]:
     return out
 
 
+# ---------- section: scoring-helpers ----------
 def _category_score(name: str, description: str, path: Path, category: str) -> float:
     keywords = CATEGORY_KEYWORDS[category]
     text = f" {name.lower()} {description.lower()} {str(path).lower().replace(os.sep, ' ')} "
@@ -202,7 +223,14 @@ def _category_score(name: str, description: str, path: Path, category: str) -> f
     return min(1.0, score)
 
 
-def _recency_norm_from_path(path: Path) -> float:
+# WARN: see SKETCHY_CODE_AUDIT.md#s3-3 — FIXED in F19 (canonical source; imported by webui/inventory.py).
+def _recency_norm_from_path(path: Path) -> Optional[float]:
+    """exp(-days/75) from git log when path is in a repo, else file mtime.
+    Returns None on stat() failure (disconnected drive / EACCES / etc.) — caller
+    MUST exclude the entry from scan output. Curator skill's locked schema requires
+    recency_norm in [0.0, 1.0]; a 0.0 sentinel was indistinguishable from a genuinely
+    stale tool, so the entry is dropped with a stderr warning instead.
+    """
     git_dir = path
     while git_dir != git_dir.parent:
         if (git_dir / ".git").exists():
@@ -220,7 +248,7 @@ def _recency_norm_from_path(path: Path) -> float:
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=SUBPROCESS_TIMEOUT_SECONDS,
+                    timeout=GIT_LOG_TIMEOUT_SECONDS,
                     check=False,
                 )
                 if proc.returncode == 0 and proc.stdout and proc.stdout.strip():
@@ -230,12 +258,20 @@ def _recency_norm_from_path(path: Path) -> float:
     if last_commit_epoch is None:
         try:
             last_commit_epoch = path.stat().st_mtime
-        except OSError:
-            return 0.0
+        except OSError as exc:
+            import uuid
+            errorId = uuid.uuid4().hex[:8]
+            print(
+                f"toolforge: stat failed for {path}: {exc} (recency unknown) "
+                f"errorId={errorId} cls={type(exc).__name__}",
+                file=sys.stderr,
+            )
+            return None
     days = max(0.0, (time.time() - last_commit_epoch) / RECENCY_SECONDS_PER_DAY)
     return math.exp(-days / DECAY_HALFLIFE_DAYS)
 
 
+# ---------- section: entry-builders ----------
 def _entry_from_skill_md(path: Path, source: str, root: Path) -> Optional[dict]:
     text = _read_capped(path)
     if not text:
@@ -281,6 +317,7 @@ def _entry_from_plugin_json(path: Path, source: str, root: Path) -> Optional[dic
     }
 
 
+# ---------- section: scanners ----------
 def _iter_relevant_files(root: Path, deadline: float) -> list[tuple[Path, str]]:
     """Walk root with depth + count + deadline caps. No symlink follow."""
     results: list[tuple[Path, str]] = []
@@ -297,9 +334,11 @@ def _iter_relevant_files(root: Path, deadline: float) -> list[tuple[Path, str]]:
                 for entry in it:
                     if entry.is_symlink():
                         continue
-                    count += 1
+                    # WARN: see SKETCHY_CODE_AUDIT.md#s4-3 — FIXED in F27 (check fires before increment; stderr warns at cap).
                     if count >= MAX_FILES_SCANNED:
+                        print(f"toolforge_local_scan: file-count cap reached at {MAX_FILES_SCANNED}", file=sys.stderr)
                         break
+                    count += 1
                     p = Path(entry.path)
                     if entry.is_dir(follow_symlinks=False):
                         if entry.name in {"node_modules", ".git", "__pycache__", "dist", ".vite", ".venv", "venv"}:
@@ -310,7 +349,9 @@ def _iter_relevant_files(root: Path, deadline: float) -> list[tuple[Path, str]]:
                             results.append((p, "skill"))
                         elif p.name == "plugin.json":
                             results.append((p, "plugin"))
-        except OSError:
+        # WARN: see SKETCHY_CODE_AUDIT.md#s4-2 — FIXED in F26 (stderr-warn before continuing).
+        except OSError as exc:
+            print(f"toolforge_local_scan: unreadable subdir {current!r}: {exc}", file=sys.stderr)
             continue
     return results
 
@@ -345,11 +386,23 @@ def _scan_local_paths(category: str, deadline: float) -> list[dict]:
             )
             if entry["category_score"] < MIN_CATEGORY_SCORE:
                 continue
+            # Stat-failure entries are dropped: the curator skill's locked schema
+            # requires recency_norm in [0.0, 1.0] and composite scoring uses
+            # `recency_norm * 0.3`. Emitting 0.0 would silently hide a broken scan
+            # as "an old tool". Stderr warning logged inside _recency_norm_from_path.
+            recency = _recency_norm_from_path(Path(entry["path"]))
+            if recency is None:
+                continue
             entry["category"] = category
             entry["stars_norm"] = LOCAL_STARS_NORM
-            entry["recency_norm"] = _recency_norm_from_path(Path(entry["path"]))
+            entry["recency_norm"] = recency
             out.append(entry)
     return out
+
+
+# Header regex for plain-text fallback. Anchored to full-width column names so
+# plugins whose names start with "Plugin"/"Name" are not mistakenly dropped.
+_PLUGIN_LIST_HEADER_RE = re.compile(r"^\s*Plugin\s+Version\s+Source\b", re.IGNORECASE)
 
 
 def _scan_installed_plugins() -> list[dict]:
@@ -357,6 +410,46 @@ def _scan_installed_plugins() -> list[dict]:
     claude_exe = shutil.which("claude")
     if not claude_exe:
         return out
+
+    # Primary path: --json mode (supported per https://code.claude.com/docs/en/plugins-reference).
+    try:
+        proc_json = subprocess.run(
+            [claude_exe, "plugin", "list", "--json"],
+            shell=False, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+            timeout=CLAUDE_LIST_TIMEOUT_SECONDS, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError) as exc:
+        print(f"toolforge_local_scan: claude plugin list --json failed: {exc}", file=sys.stderr)
+        return out
+
+    if proc_json.returncode == 0 and proc_json.stdout:
+        try:
+            data = json.loads(proc_json.stdout)
+            if isinstance(data, list):
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+                    raw_name = item.get("name") or item.get("plugin") or ""
+                    nm = _normalize_name(str(raw_name))
+                    if nm and TOOL_NAME_RE.match(nm):
+                        out.append({
+                            "name": nm,
+                            "type": "plugin",
+                            "source": "installed-plugin",
+                            "path": None,
+                            "installed": True,
+                            "description": f"installed Claude Code plugin: {nm}",
+                        })
+            return out
+        except json.JSONDecodeError:
+            print(
+                "toolforge_local_scan: claude plugin list --json returned non-JSON; "
+                "falling back to plain-text parser",
+                file=sys.stderr,
+            )
+
+    # Fallback: plain-text parse for older CLI versions without --json.
     try:
         proc = subprocess.run(
             [claude_exe, "plugin", "list"],
@@ -371,7 +464,8 @@ def _scan_installed_plugins() -> list[dict]:
         return out
     for line in proc.stdout.splitlines():
         line = line.strip()
-        if not line or line.startswith(("---", "===", "NAME", "Plugin", "Name")):
+        # WARN: see SKETCHY_CODE_AUDIT.md#s4-10 — FIXED in F32 (--json mode primary; stricter header regex in fallback).
+        if not line or line.startswith(("---", "===")) or _PLUGIN_LIST_HEADER_RE.match(line):
             continue
         first = line.split(None, 1)[0]
         nm = _normalize_name(first)
@@ -455,6 +549,7 @@ def _dedupe_and_cap(entries: list[dict]) -> list[dict]:
     return ranked[:MAX_LOCAL_PER_CATEGORY]
 
 
+# ---------- section: cache ----------
 def _cache_path(category: str) -> Path:
     return Path(tempfile.gettempdir()) / f"toolforge_local_scan_{category}.json"
 
@@ -471,18 +566,45 @@ def _load_cache(category: str) -> Optional[list[dict]]:
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except json.JSONDecodeError as exc:
+        # Corruption (partial write, disk error, tampering). Quarantine instead
+        # of unlink so forensic evidence survives. Re-scan on return.
+        print(
+            f"toolforge: cache corrupt at {path}, re-scanning: "
+            f"{exc.msg} at line {exc.lineno} col {exc.colno}",
+            file=sys.stderr,
+        )
+        quarantine = path.with_suffix(path.suffix + f".corrupt.{int(time.time())}")
+        try:
+            path.rename(quarantine)
+        except OSError as rn_exc:
+            print(
+                f"toolforge_local_scan: quarantine of {path} failed: {rn_exc}",
+                file=sys.stderr,
+            )
+        return None
+    except OSError as exc:
+        # Not FileNotFoundError (caught by .exists() check above) — permission
+        # or IO issue worth surfacing.
+        print(
+            f"toolforge_local_scan: cache read failed at {path}: {exc}",
+            file=sys.stderr,
+        )
         return None
 
 
 def _save_cache(category: str, data: list[dict]) -> None:
     path = _cache_path(category)
     try:
-        path.write_text(json.dumps(data), encoding="utf-8")
+        # WARN: see SKETCHY_CODE_AUDIT.md#s4-4 — FIXED in F11 (atomic write via tmp + os.replace).
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        os.replace(tmp, path)
     except OSError as exc:
         print(f"toolforge_local_scan: cache write failed: {exc}", file=sys.stderr)
 
 
+# ---------- section: public-api ----------
 def scan(category: str, force: bool = False) -> list[dict]:
     if category not in SUPPORTED_CATEGORIES:
         raise ValueError(f"unsupported category {category!r}: pick one of {sorted(SUPPORTED_CATEGORIES)}")
@@ -511,12 +633,15 @@ def rescan_all() -> int:
     return cleared
 
 
+# ---------- section: self-test ----------
 def _self_test() -> int:
     passed = 0
     failed = 0
     try:
         assert _normalize_name("Frontend-Design") == "frontend-design"
-        assert _normalize_name("foo;bar") == "foo-bar"
+        # Canonical impl drops disallowed chars silently (see toolforge_usage_detector._normalize_name).
+        assert _normalize_name("foo;bar") == "foobar"
+        assert _normalize_name("foo:bar") == "foo/bar"  # colon -> slash for plugin:skill namespacing
         assert _normalize_name("") == ""
         print("OK: name normalization")
         passed += 1
@@ -565,10 +690,31 @@ def _self_test() -> int:
     except (AssertionError, OSError) as exc:
         print(f"FAIL: rescan_all: {exc}")
         failed += 1
+    try:
+        # WARN: see SKETCHY_CODE_AUDIT.md#s5-2 — FIXED in F39 (sprint tag dropped from local_scan.py).
+        # stat() failure must return None (not 0.0) so downstream caller drops
+        # the entry instead of silently ranking a broken scan as "an old tool".
+        # Use a non-git path to skip the git-log branch and hit the stat fallback.
+        import pathlib as _pl
+        original_stat = _pl.Path.stat
+        def _boom(self, *args, **kwargs):
+            raise PermissionError("EACCES — simulated")
+        _pl.Path.stat = _boom  # type: ignore[assignment]
+        try:
+            result = _recency_norm_from_path(Path("/nonexistent/no-git-here/file.md"))
+        finally:
+            _pl.Path.stat = original_stat  # type: ignore[assignment]
+        assert result is None, f"expected None on stat failure, got {result!r}"
+        print("OK: recency_norm stat-failure returns None")
+        passed += 1
+    except AssertionError as exc:
+        print(f"FAIL: recency_norm stat failure: {exc}")
+        failed += 1
     print(f"--- self-test: {passed} passed, {failed} failed ---")
     return 0 if failed == 0 else 1
 
 
+# ---------- section: cli-entry-point ----------
 def _usage() -> str:
     return (
         "Usage:\n"

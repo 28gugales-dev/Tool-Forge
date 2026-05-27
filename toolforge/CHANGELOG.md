@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — sketchy code audit pass (2026-05-27)
+
+### Security
+
+- **F01** — Format-string injection in `bin/toolforge_security_handoff.py` patched (`.format` -> `string.Template.safe_substitute`, `TOOL_NAME_RE` charset gate added). See `SKETCHY_CODE_AUDIT.md#s1-1`.
+- **F02** — `.html` removed from `webui/server.py` `ALLOWED_OPEN_EXTS` (local-XSS via `os.startfile`). See `SKETCHY_CODE_AUDIT.md#s1-2`.
+- **F03** — `drawflow` and Google Fonts vendored into `webui/static/vendor/`; no external CDN deps in the WebUI. See `SKETCHY_CODE_AUDIT.md#s1-2`.
+- **F16** — Static asset serving caps at 20 MiB and streams in 64 KiB chunks. See `SKETCHY_CODE_AUDIT.md#s2-11`.
+- **F29** — Blank/symbol-only triggers rejected at export. See `SKETCHY_CODE_AUDIT.md#s4-6`.
+
+### Fixed
+
+- **F04 / F05** — Silent `catch` blocks in `app.js` (`loadSavedFlows`, `addConnection`) now surface via toast. See `SKETCHY_CODE_AUDIT.md#s1-3`.
+- **F06** — `subprocess.run` inside `toolforge_install.py` now has 300s timeout + `TimeoutExpired` handler. See `SKETCHY_CODE_AUDIT.md#s2-4`.
+- **F07** — `persist_to_db` in `toolforge_usage_detector.py` catches `sqlite3.Error`; returns `(written, failed)`. See `SKETCHY_CODE_AUDIT.md#s2-5`.
+- **F08** — `webui/inventory.py` surfaces rating-DB errors into response `warnings` list. See `SKETCHY_CODE_AUDIT.md#s2-1`.
+- **F09** — `webui/server.py` `/api/flows` listing returns warnings for corrupt files; `/api/flows/<trigger>` returns 422 on parse fail. See `SKETCHY_CODE_AUDIT.md#s2-3`.
+- **F10** — `webui/exporter.py` skill export is now atomic via temp dir + `os.replace`. See `SKETCHY_CODE_AUDIT.md#s2-2`.
+- **F11** — Cache writes in `toolforge_local_scan.py` and `toolforge_usage_detector.py` are atomic (`.tmp` + `os.replace`). See `SKETCHY_CODE_AUDIT.md#s4-4`.
+- **F12** — `hooks/post-tool-use-counter.py` uses `os.open`/`os.write` for 1-byte appends; retry budget bumped to 375ms exponential. See `SKETCHY_CODE_AUDIT.md#s2-6`.
+- **F13** — TOCTOU race in `hooks/session-end-likert.py` collapsed to single `try/except FileNotFoundError`. See `SKETCHY_CODE_AUDIT.md#s2-7`.
+- **F14** — `_prune_stale` in `hooks/post-tool-use-counter.py` now skips the active counter file. See `SKETCHY_CODE_AUDIT.md#s2-8`.
+- **F15** — `_prune_stale` sampled at 1% to avoid cost on hot sessions. See `SKETCHY_CODE_AUDIT.md#s2-9`.
+- **F25** — Corrupt config in `toolforge_local_scan.py` quarantined to `.corrupt.<ts>`. See `SKETCHY_CODE_AUDIT.md#s4-1`.
+- **F26** — Unreadable subdir in `toolforge_local_scan.py` logged to stderr. See `SKETCHY_CODE_AUDIT.md#s4-2`.
+- **F28** — Per-trigger threading lock added to `webui/exporter.py`. See `SKETCHY_CODE_AUDIT.md#s4-5`.
+- **F30** — Empty hash file in `toolforge_verify_fallback.py` returns exit 3. See `SKETCHY_CODE_AUDIT.md#s4-11`.
+- **F31** — Mid-read swallows in `toolforge_usage_detector.py` now log to stderr. See `SKETCHY_CODE_AUDIT.md#s4-9`.
+- **F33 / F34** — Frontend toasts on JSON parse / drop payload errors. See `SKETCHY_CODE_AUDIT.md#s4-7`, `#s4-8`.
+
+### Changed
+
+- **F23** — `_session_count_had_error` module-global removed; `_current_session_count` returns tuple. See `SKETCHY_CODE_AUDIT.md#s3-7`.
+- **F24** — Project-path hash in `webui/inventory.py` now uses `hashlib.sha1` (deterministic across restarts). See `SKETCHY_CODE_AUDIT.md#s3-8`.
+
+### Removed
+
+- **F46** — `bin/toolforge_dumb_scanner.py` deleted (superseded by `toolforge_usage_detector.py`).
+
+### Documentation
+
+- **F38** — `PATTERNS.md` reference in `toolforge_install.py` corrected to `ARCHITECTURE.md`.
+- **F40** — Stale `TOOLFORGE_DB` env-var note removed from `toolforge_db._self_test`.
+- **F41** — `v0.1: ... Defer to v0.2` deferral comment in `toolforge_install.py` rewritten.
+- **F43** — `_dedupe` docstring in `webui/inventory.py` aligned with actual key shape.
+- Added `SKETCHY_CODE_AUDIT.md` — known issues, doc/code drift, future-risk spots (anchored).
+- Added `FIX_PLAYBOOK.md` — per-ticket fix recipes.
+- Added `FIX_CONVENTIONS.md` — shared patterns (atomic write, validators, toast helper).
+
+See `SKETCHY_CODE_AUDIT.md` §9 for the prioritized fix order for any remaining tickets.
+
 ## [Unreleased]
 
 ### Added

@@ -26,6 +26,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import time
@@ -40,16 +41,18 @@ if str(HERE) not in sys.path:
 
 import toolforge_db  # type: ignore  # noqa: E402
 
+# ---------- section: constants ----------
 DEFAULT_DAYS = 30
 PROJECTS_GLOB = os.path.expanduser("~/.claude/projects/*/*.jsonl")
 MAX_TRANSCRIPTS = 500
-MAX_FILE_BYTES = 200 * 1024 * 1024
+MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MiB
 SCAN_BUDGET_SECONDS = 5.0
 CACHE_TTL_SECONDS = 3600
 
 TOOL_KEY_NAMESPACES = ("skill", "agent", "mcp", "builtin")
 
 
+# ---------- section: tool-key-classification ----------
 def _parse_ts(ts: str) -> float:
     """Parse ISO 8601 timestamp to epoch seconds. Returns 0 on failure."""
     if not ts:
@@ -60,6 +63,7 @@ def _parse_ts(ts: str) -> float:
         return 0.0
 
 
+# WARN: see SKETCHY_CODE_AUDIT.md#s3-5 — FIXED in F21 (canonical source; imported by toolforge_local_scan.py and toolforge_db.py).
 def _normalize_name(s: str) -> str:
     """Lowercase, map colons to slash (plugin:skill namespacing), strip junk.
 
@@ -100,6 +104,7 @@ def _classify(block: dict) -> Optional[str]:
     return f"builtin:{_normalize_name(name)}"
 
 
+# ---------- section: scanners ----------
 def _iter_transcripts(cutoff_epoch: float) -> list[str]:
     """List candidate JSONL paths with mtime > cutoff. Cap at MAX_TRANSCRIPTS."""
     paths: list[tuple[float, str]] = []
@@ -123,7 +128,9 @@ def _scan_one(path: str, cutoff_epoch: float, counts: Counter, last_used: dict) 
             print(f"usage_detector: skipping {path} ({st.st_size} bytes > {MAX_FILE_BYTES})",
                   file=sys.stderr)
             return 0, 0
-    except OSError:
+    # WARN: see SKETCHY_CODE_AUDIT.md#s4-9 — FIXED in F31 (stderr-logged; stat aborted, caller sees 0,0).
+    except OSError as exc:
+        print(f"toolforge_usage_detector: stat aborted on {path}: {exc}", file=sys.stderr)
         return 0, 0
 
     events = 0
@@ -155,11 +162,13 @@ def _scan_one(path: str, cutoff_epoch: float, counts: Counter, last_used: dict) 
                     counts[key] += 1
                     if ts_epoch > last_used.get(key, 0):
                         last_used[key] = ts_epoch
-    except OSError:
-        pass
+    # WARN: see SKETCHY_CODE_AUDIT.md#s4-9 — FIXED in F31 (stderr-logged; read aborted mid-file, returns partial).
+    except OSError as exc:
+        print(f"toolforge_usage_detector: read aborted on {path}: {exc}", file=sys.stderr)
     return events, uses
 
 
+# ---------- section: public-api ----------
 def detect_usage(days: int = DEFAULT_DAYS, force: bool = False) -> dict:
     """Compute usage counts + last-used timestamps over the last N days."""
     if days < 1 or days > 365:
@@ -207,20 +216,36 @@ def detect_usage(days: int = DEFAULT_DAYS, force: bool = False) -> dict:
     return result
 
 
-def persist_to_db(result: dict) -> int:
-    """Write usage_stats rows from a detect_usage result. Returns rows written."""
+# ---------- section: db-persistence ----------
+def persist_to_db(result: dict) -> tuple[int, int]:
+    """Write usage_stats rows from a detect_usage result.
+
+    Returns (written, failed) where:
+      written = rows successfully upserted into usage_stats.
+      failed  = rows that raised on persist (ValueError on int coerce, OSError
+                on FS-backed DB issue, sqlite3.Error on lock/integrity/etc.).
+
+    The `failed` counter is distinct from any future `skipped` counter (see
+    audit §4-9): `skipped` would mean a row was rejected by validation
+    BEFORE the DB call; `failed` means the DB call itself raised. Both are
+    survivable per-row; the loop continues past either.
+    """
     counts = result.get("counts", {})
     last_used = result.get("last_used", {})
     written = 0
+    failed = 0
     for key, count in counts.items():
         try:
             toolforge_db.upsert_usage_stats(key, int(count), last_used.get(key))
             written += 1
-        except (ValueError, OSError) as exc:
+        # WARN: see SKETCHY_CODE_AUDIT.md#s2-5 — FIXED in F07 (sqlite3.Error now caught; failed counter surfaces drops).
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            failed += 1
             print(f"usage_detector: skip {key}: {exc}", file=sys.stderr)
-    return written
+    return written, failed
 
 
+# ---------- section: cache ----------
 def _cache_path(days: int) -> Path:
     return Path(tempfile.gettempdir()) / f"toolforge_usage_{days}d.json"
 
@@ -236,18 +261,44 @@ def _load_cache(path: Path) -> Optional[dict]:
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except json.JSONDecodeError as exc:
+        # Corruption (partial write, disk error, tampering). Quarantine instead
+        # of unlink so forensic evidence survives. Re-scan on return.
+        print(
+            f"toolforge: cache corrupt at {path}, re-scanning: "
+            f"{exc.msg} at line {exc.lineno} col {exc.colno}",
+            file=sys.stderr,
+        )
+        quarantine = path.with_suffix(path.suffix + f".corrupt.{int(time.time())}")
+        try:
+            path.rename(quarantine)
+        except OSError as rn_exc:
+            print(
+                f"usage_detector: quarantine of {path} failed: {rn_exc}",
+                file=sys.stderr,
+            )
+        return None
+    except OSError as exc:
+        # Not FileNotFoundError (caught by .exists() check above) — permission
+        # or IO issue worth surfacing.
+        print(
+            f"usage_detector: cache read failed at {path}: {exc}",
+            file=sys.stderr,
+        )
         return None
 
 
 def _save_cache(path: Path, data: dict) -> None:
     try:
-        path.write_text(json.dumps(data), encoding="utf-8")
+        # WARN: see SKETCHY_CODE_AUDIT.md#s4-4 — FIXED in F11 (atomic write via tmp + os.replace).
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        os.replace(tmp, path)
     except OSError as exc:
         print(f"usage_detector: cache write failed: {exc}", file=sys.stderr)
 
 
-# ---------- self-test ----------
+# ---------- section: self-test ----------
 
 def _self_test() -> int:
     passed = 0
@@ -386,6 +437,7 @@ def _self_test() -> int:
     return 0 if failed == 0 else 1
 
 
+# ---------- section: cli-entry-point ----------
 def _usage() -> str:
     return (
         "Usage:\n"
@@ -437,8 +489,9 @@ def main(argv: list[str]) -> int:
         return 2
 
     if persist:
-        n = persist_to_db(result)
-        result["persisted_rows"] = n
+        n_written, n_failed = persist_to_db(result)
+        result["persisted_rows"] = n_written
+        result["persisted_failed"] = n_failed
 
     if as_json:
         print(json.dumps(result, indent=2))
@@ -451,7 +504,8 @@ def main(argv: list[str]) -> int:
     if result.get("partial"):
         print("PARTIAL: scan budget exceeded, some transcripts skipped")
     if persist:
-        print(f"Persisted to DB:      {result.get('persisted_rows', 0)} rows")
+        print(f"Persisted to DB:      {result.get('persisted_rows', 0)} rows "
+              f"({result.get('persisted_failed', 0)} failed)")
 
     by_ns: dict[str, list[tuple[str, int]]] = {ns: [] for ns in TOOL_KEY_NAMESPACES}
     for key, count in result["counts"].items():

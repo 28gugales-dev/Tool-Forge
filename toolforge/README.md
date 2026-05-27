@@ -198,6 +198,7 @@ rm ~/.claude/toolforge.db
 
 - `ARCHITECTURE.md`: full ranking formula, security table, data flow.
 - `TROUBLESHOOTING.md`: common install and runtime issues.
+- `SKETCHY_CODE_AUDIT.md`: known issues, doc/code drift, future-risk spots. In-source `# WARN:` comments point to anchors here.
 - `CHANGELOG.md`: version history.
 - `CONTRIBUTING.md`: how to add a category or extend the curator.
 - `demo/demo_script.md`: the live demo walkthrough.

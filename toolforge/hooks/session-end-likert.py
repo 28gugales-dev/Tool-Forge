@@ -74,19 +74,27 @@ def main() -> int:
         print(f"toolforge likert: bad JSON on stdin: {exc}", file=sys.stderr)
         return _emit("SessionEnd", "hook input unreadable, skipping rating prompt")
 
-    session_id = str(
-        event.get("session_id")
-        or event.get("sessionId")
-        or os.environ.get("CLAUDE_SESSION_ID", "default")
-    )
+    # Refuse to write counter without session_id — falling through to "default" caused cross-session counter collision (audit H5).
+    # WARN: see SKETCHY_CODE_AUDIT.md#s2-10 — FIXED in F35 (verified: Claude Code hooks pass session_id via stdin JSON only; no env var exists. Docs: https://code.claude.com/docs/en/hooks).
+    session_id = event.get("session_id") or event.get("sessionId")
+    if not session_id:
+        print(
+            f"toolforge: hook aborted — no session_id in event payload. Event keys: {list(event.keys())}",
+            file=sys.stderr,
+        )
+        return 1
+    session_id = str(session_id)
     path = _counter_path(session_id)
 
     try:
+        # WARN: see SKETCHY_CODE_AUDIT.md#s2-7 — FIXED in F13 (TOCTOU collapsed into single try/except FileNotFoundError).
         try:
-            count = path.stat().st_size if path.exists() else 0
+            count = path.stat().st_size
+        except FileNotFoundError:
+            count = 0
         except OSError as exc:
-            print(f"toolforge likert: stat failed: {exc}", file=sys.stderr)
-            return _emit("SessionEnd", f"counter unreadable ({exc}), skipping rating prompt")
+            print(f"toolforge_session_end_likert: stat failed on {path}: {exc}", file=sys.stderr)
+            count = 0
 
         if count < THRESHOLD:
             return 0
