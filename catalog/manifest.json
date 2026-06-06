@@ -1,0 +1,19 @@
+{
+  "version": "1.0.0",
+  "generated": "2026-06-06",
+  "description": "ToolForge curated cold-start catalog — hand-reviewed, quality-gated MCP servers and skills covering every major use case.",
+  "quality_criteria": "Official tools (Anthropic, GitHub, Microsoft, etc.) OR 300+ GitHub stars OR universally recommended across 3+ independent sources. All install commands verified against published package registries.",
+  "categories": {
+    "coding": "Software development, debugging, code review, testing, architecture, documentation, repo understanding",
+    "writing": "Technical writing, research, document analysis, PDF reading, summarization, academic work",
+    "data": "Data analysis, SQL databases, spreadsheets, financial modeling, math, LaTeX",
+    "automation": "Workflow automation, project management, knowledge management, multi-step agents, token reduction",
+    "ui": "Frontend development, UI component generation, design-to-code, creative content, web automation"
+  },
+  "total_entries": 20,
+  "tier_1_count": 20,
+  "half_life_days": 75,
+  "cold_start_note": "On first ToolForge install, synthetic ratings are inserted for all catalog entries so the Bayesian ranker has signal from day one. Synthetic ratings use a fixed past date so they decay at the standard 75-day half-life — real user ratings naturally overtake them within a few sessions.",
+  "seeded_marker": "__catalog_seeded__",
+  "update_policy": "Catalog entries are reviewed quarterly. A tool is removed if its repo is archived, has no commits in 6 months, or its install command is broken."
+}

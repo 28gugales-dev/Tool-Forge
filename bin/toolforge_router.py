@@ -261,11 +261,42 @@ def route(
         key=lambda x: x[1],
         reverse=True,
     )
-    return [
-        {"name": n, "score": round(s, 4), "description": d}
+    results = [
+        {"name": n, "score": round(s, 4), "description": d, "installed": True}
         for n, s, d in ranked[:TOP_K]
         if s > SCORE_THRESHOLD
     ]
+    if results:
+        return results
+
+    # No installed skill matched — fall back to catalog suggestions.
+    return _catalog_suggest(prompt)
+
+
+def _catalog_suggest(prompt: str) -> list[dict]:
+    """Return top catalog matches when no installed skill matches.
+
+    Results carry catalog_only=True and installed=False so the hook can
+    emit a different message (suggest /toolforge-hunt rather than invoking
+    a skill directly).
+    """
+    try:
+        import toolforge_catalog  # type: ignore
+        matches = toolforge_catalog.suggest(prompt, top_k=TOP_K)
+        return [
+            {
+                "name": m["name"],
+                "score": round(0.01 + m["match_score"] * 0.01, 4),
+                "description": m.get("description", ""),
+                "installed": False,
+                "catalog_only": True,
+                "install_command": m.get("install_command", ""),
+                "categories": m.get("categories", []),
+            }
+            for m in matches
+        ]
+    except Exception:
+        return []
 
 
 # ---------- self-test ----------

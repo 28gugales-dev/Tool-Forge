@@ -58,12 +58,37 @@ def _sanitize_desc(text: str) -> str:
 
 
 def _build_injection(matches: list[dict]) -> str:
+    """Build injection for installed skill matches."""
     parts: list[str] = []
     for m in matches:
         desc = _sanitize_desc(m.get("description") or "")
         name = m["name"]
         parts.append(f"{name} ({desc})" if desc else name)
     body = "Skills that may match: " + ", ".join(parts) + ". Invoke via Skill tool if relevant."
+    tag = f"<system-reminder>{body}</system-reminder>"
+    if len(tag) > INJECT_CHAR_LIMIT:
+        tag = tag[:INJECT_CHAR_LIMIT - 20] + "...</system-reminder>"
+    return tag
+
+
+def _build_catalog_injection(matches: list[dict]) -> str:
+    """Build injection for catalog-only matches (not yet installed).
+
+    Suggests /toolforge-hunt or /toolforge <category> instead of direct
+    invocation — the tool is not installed so the Skill tool won't find it.
+    """
+    if not matches:
+        return ""
+    top = matches[0]
+    name = _sanitize_desc(top.get("display_name") or top["name"])
+    desc = _sanitize_desc(top.get("description") or "")
+    cats = top.get("categories", [])
+    cat = _sanitize_desc(cats[0]) if cats else "coding"
+    body = (
+        f"No installed skill matched. The catalog suggests: {name}"
+        + (f" - {desc[:60]}" if desc else "")
+        + f". Run /toolforge-hunt to find and install it, or /toolforge {cat} to browse."
+    )
     tag = f"<system-reminder>{body}</system-reminder>"
     if len(tag) > INJECT_CHAR_LIMIT:
         tag = tag[:INJECT_CHAR_LIMIT - 20] + "...</system-reminder>"
@@ -126,12 +151,15 @@ def main() -> int:
         prompt.encode("utf-8", errors="replace")
     ).hexdigest()[:8]
 
+    catalog_only = all(m.get("catalog_only") for m in matches) if matches else False
+
     log_entry: dict = {
         "ts": _now_iso(),
         "prompt_hash": prompt_hash,
         "top_keys": [m["name"] for m in matches],
         "top_scores": [m["score"] for m in matches],
         "would_inject": bool(matches),
+        "catalog_only": catalog_only,
         "elapsed_ms": elapsed_ms,
         "mode": mode,
     }
@@ -140,7 +168,12 @@ def main() -> int:
     _log(log_entry)
 
     if mode == "active" and matches:
-        _emit_injection(_build_injection(matches))
+        if catalog_only:
+            injection = _build_catalog_injection(matches)
+        else:
+            injection = _build_injection(matches)
+        if injection:
+            _emit_injection(injection)
 
     return 0  # Always 0 — never block the prompt
 

@@ -27,7 +27,7 @@ from typing import Optional
 DB_PATH = Path(os.path.expanduser("~/.claude/toolforge.db"))
 # Canonical decay half-life. Imported by toolforge_local_scan.py and webui/inventory.py.
 DECAY_HALFLIFE_DAYS = 75.0  # AI tooling moves fast — was 180d, cut to ~2.5mo
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 BAYES_PRIOR_MEAN = 3.0
 BAYES_PRIOR_WEIGHT = 5.0
 
@@ -160,6 +160,15 @@ def init_db() -> None:
         conn.commit()
     finally:
         conn.close()
+
+    # Seed catalog on brand-new installs only (not on upgrades — existing users
+    # already have real rating data that should not be polluted with synthetic rows).
+    if current == 0:
+        try:
+            import toolforge_catalog  # type: ignore
+            toolforge_catalog.seed_db()
+        except Exception:
+            pass  # catalog seeding is best-effort; never block init
 
 
 # ---------- section: installs-table ----------
