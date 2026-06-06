@@ -4,13 +4,15 @@ description: Clear the ToolForge local-source scan cache so the next /toolforge 
 
 You are running the `/toolforge-rescan` command. The local-source scanner caches results per category for 5 minutes to keep `/toolforge` discovery within budget. This command forces a fresh scan on the next `/toolforge` invocation.
 
-Shell out:
+Shell out both commands (run them sequentially, print combined output):
 
 ```
 python "${CLAUDE_PLUGIN_ROOT}/bin/toolforge_local_scan.py" rescan-all
+python "${CLAUDE_PLUGIN_ROOT}/bin/toolforge_router.py" invalidate
 ```
 
-Print the stdout to the user verbatim. Expected output: `cleared <N> cache file(s)`.
+Print both stdout outputs to the user verbatim.
+Expected: `cleared <N> cache file(s)` then `Router index cache cleared.`
 
 If the user wants to refresh a single category, tell them to pass `--force` to a `/toolforge` call (the curator skill propagates the flag to the scanner).
 
