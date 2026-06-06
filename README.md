@@ -2,9 +2,9 @@
 
 # ToolForge
 
-**Live tool discovery, smart routing, and pipeline orchestration for Claude Code.**
+**The missing tool layer for Claude Code.**
 
-*Finds what you don't have. Learns what works. Chains what you need.*
+*Finds what you don't have. Learns what works. Routes every prompt. Chains what you need.*
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Claude%20Code-blueviolet)](https://claude.ai/code)
@@ -14,6 +14,23 @@
 </div>
 
 > **No ML, no cloud, no accounts. Just SQL.**
+
+---
+
+## What ToolForge does
+
+Eight systems, one install:
+
+| Feature | What it does |
+|---|---|
+| **Live discovery** | Searches the live web for the best skill, plugin, or MCP for any task. URL-gated to 7 trusted hosts, malware-scanned before anything runs. |
+| **Cold-start catalog** | Ships 20 hand-curated, quality-gated MCP servers pre-seeded into the ranker. Brand-new users start with signal, not a blank slate. |
+| **Auto-router** | Fires on every prompt before Claude sees it. Scores all installed skills with TF-IDF cosine similarity in under 80ms. Injects the right skill when a strong match exists. |
+| **Pipeline orchestrator** | `/forge` decomposes any multi-phase task into an ordered skill chain, renders an ASCII plan, waits for approval, then executes step by step with context flowing between steps. Saves every chain for instant reuse. |
+| **Task hunter** | `/toolforge-hunt` finds the single best tool for a specific task, installs it, and immediately starts working — no second prompt. |
+| **Learning loop** | Rates every tool after each session. Bayesian-shrunk Likert scores with a 75-day exponential half-life re-rank all future discovery, routing, and pipeline results automatically. |
+| **Health monitor** | Passively flags stale, dormant, archived, inactive, and low-rated tools. Surfaces replacements before they slow you down. |
+| **Security model** | URL allow-list (7 hosts), install command sandbox (`argv[0]` allow-list, `shell=False`), and a semantic malware scan before any web-discovered tool is allowed to run. |
 
 ---
 
