@@ -13,7 +13,7 @@
 
 </div>
 
-> **No ML, no cloud, no accounts. Just SQL.**
+> **No ML, no cloud, no accounts. Only smart SQL work.**
 
 ---
 
