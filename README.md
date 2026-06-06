@@ -332,32 +332,6 @@ The `pipelines` table lets forge recognize when it has run a skill chain before 
 
 ---
 
-## Roadmap
-
-### v0.2 (shipped)
-- [x] TF-IDF auto-router — `UserPromptSubmit` hook routes every prompt to matching skills
-- [x] `/toolforge-hunt` — task-specific skill search, install, and immediate execution
-- [x] `/forge` — pipeline orchestrator: decompose → route → plan → execute → save
-- [x] Health monitoring — stale, dormant, archived, inactive, and low-rated tool detection
-- [x] Pipeline persistence — SQLite `pipelines` table with similarity matching for chain reuse
-- [x] Schema v3 migration — backward-compatible upgrade from v2
-
-### v0.3 (planned)
-- Proactive scheduled scan — cron-friendly script that surfaces newly trending tools without waiting for `/toolforge`
-- Cloud Likert sync (opt-in, anonymous) — aggregate ratings across users for better cold-start ranking
-
-### v0.4 (exploring)
-- Per-user telemetry opt-in for live trending discovery (anonymized hash IDs, no accounts)
-- Router active-mode auto-promotion after shadow validation window
-
-### Explicit non-goals through v1
-- Multi-user accounts — SQLite local only
-- Auto-install without consent — zero-click crosses into supply-chain attack surface
-- Custom TUI — plain stdout is intentional
-- More than 5 base categories — UI, backend, database, testing, devops cover the current surface area
-
----
-
 ## License
 
 [MIT](LICENSE)
