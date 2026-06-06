@@ -27,7 +27,7 @@ from typing import Optional
 DB_PATH = Path(os.path.expanduser("~/.claude/toolforge.db"))
 # Canonical decay half-life. Imported by toolforge_local_scan.py and webui/inventory.py.
 DECAY_HALFLIFE_DAYS = 75.0  # AI tooling moves fast — was 180d, cut to ~2.5mo
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 BAYES_PRIOR_MEAN = 3.0
 BAYES_PRIOR_WEIGHT = 5.0
 
@@ -136,6 +136,23 @@ def init_db() -> None:
                     composite    REAL NOT NULL DEFAULT 0.0,
                     computed_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
                 );
+                """
+            )
+        if current < 3:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS pipelines (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_desc    TEXT NOT NULL,
+                    steps_hash   TEXT NOT NULL,
+                    steps_json   TEXT NOT NULL,
+                    success      INTEGER NOT NULL DEFAULT 0,
+                    run_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_pipelines_steps_hash
+                    ON pipelines(steps_hash);
+                CREATE INDEX IF NOT EXISTS idx_pipelines_run_at
+                    ON pipelines(run_at DESC);
                 """
             )
         if current < SCHEMA_VERSION:
@@ -423,6 +440,89 @@ def get_routing_scores_bulk(keys: list[str]) -> dict:
     return result
 
 
+# ---------- section: pipelines-v3 ----------
+
+
+def save_pipeline(task_desc: str, steps_hash: str, steps_json: str, success: bool) -> int:
+    """Insert a pipeline record. Returns the new row id."""
+    if not task_desc or not task_desc.strip():
+        raise ValueError("task_desc must be non-empty")
+    if not steps_hash or not steps_hash.strip():
+        raise ValueError("steps_hash must be non-empty")
+    if not steps_json or not steps_json.strip():
+        raise ValueError("steps_json must be non-empty")
+    # Validate steps_json is parseable
+    try:
+        json.loads(steps_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"steps_json is not valid JSON: {exc}") from exc
+    init_db()
+    conn = _connect()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO pipelines (task_desc, steps_hash, steps_json, success)
+            VALUES (?, ?, ?, ?)
+            """,
+            (task_desc.strip(), steps_hash.strip()[:64], steps_json, 1 if success else 0),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def get_pipelines_by_hash(steps_hash: str, limit: int = 5) -> list[dict]:
+    """Return past pipelines whose step chain matches steps_hash, newest first."""
+    if limit < 1 or limit > 100:
+        raise ValueError("limit must be 1..100")
+    init_db()
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, task_desc, steps_json, success, run_at
+            FROM pipelines
+            WHERE steps_hash = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (steps_hash.strip()[:64], int(limit)),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [
+        {"id": r[0], "task_desc": r[1], "steps_json": r[2],
+         "success": bool(r[3]), "run_at": r[4]}
+        for r in rows
+    ]
+
+
+def get_recent_pipelines(limit: int = 10) -> list[dict]:
+    """Return the most recently run pipelines."""
+    if limit < 1 or limit > 100:
+        raise ValueError("limit must be 1..100")
+    init_db()
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, task_desc, steps_hash, steps_json, success, run_at
+            FROM pipelines
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [
+        {"id": r[0], "task_desc": r[1], "steps_hash": r[2],
+         "steps_json": r[3], "success": bool(r[4]), "run_at": r[5]}
+        for r in rows
+    ]
+
+
 # ---------- section: cli-entry-points ----------
 
 
@@ -616,7 +716,30 @@ def _self_test() -> int:
             print(f"FAIL: deprecation got {dep}")
             failed += 1
 
-        # 6. v2 routing_scores
+        # 6. v3 pipelines roundtrip
+        steps = '[{"step":1,"skill_name":"code-review","sub_task":"review it"}]'
+        pid = save_pipeline("review the PR", "abc123", steps, True)
+        found = get_pipelines_by_hash("abc123")
+        recent = get_recent_pipelines(1)
+        if (pid > 0 and found and found[0]["success"] is True
+                and found[0]["task_desc"] == "review the PR"
+                and recent and recent[0]["id"] == pid):
+            print("OK: v3 pipelines roundtrip")
+            passed += 1
+        else:
+            print(f"FAIL: pipelines got pid={pid}, found={found}, recent={recent}")
+            failed += 1
+
+        # 7. pipelines: invalid JSON rejected
+        try:
+            save_pipeline("task", "hash", "not-json", False)
+            print("FAIL: invalid steps_json accepted")
+            failed += 1
+        except ValueError:
+            print("OK: invalid steps_json rejected")
+            passed += 1
+
+        # 8. v2 routing_scores (was test 6 — renumbered after inserting pipeline tests)
         upsert_routing_score("skill:impeccable", 0.5, 0.7, 0.3, 0.8, 0.6)
         scores = get_routing_scores_bulk(["skill:impeccable", "skill:missing"])
         if (scores["skill:impeccable"]
@@ -682,6 +805,9 @@ def _usage() -> str:
         "  toolforge_db.py get_deprecation <url>\n"
         "  toolforge_db.py upsert_routing <tool_key> <desc> <name> <usage> <likert> <composite>\n"
         "  toolforge_db.py get_routing_bulk <k1> ...\n"
+        "  toolforge_db.py save_pipeline <task_desc> <steps_hash> <steps_json> [--success]\n"
+        "  toolforge_db.py get_pipelines_by_hash <steps_hash> [<limit>]\n"
+        "  toolforge_db.py get_recent_pipelines [<limit>]\n"
         "  toolforge_db.py schema_version\n"
         "  toolforge_db.py --self-test\n"
     )
@@ -755,6 +881,21 @@ def main(argv: list[str]) -> int:
             return 0
         if cmd == "get_routing_bulk":
             print(json.dumps(get_routing_scores_bulk(list(argv[2:]))))
+            return 0
+        if cmd == "save_pipeline":
+            # save_pipeline <task_desc> <steps_hash> <steps_json> [--success]
+            success_flag = "--success" in argv
+            args = [a for a in argv[2:] if a != "--success"]
+            row_id = save_pipeline(args[0], args[1], args[2], success_flag)
+            print(row_id)
+            return 0
+        if cmd == "get_pipelines_by_hash":
+            limit = int(argv[3]) if len(argv) > 3 else 5
+            print(json.dumps(get_pipelines_by_hash(argv[2], limit)))
+            return 0
+        if cmd == "get_recent_pipelines":
+            limit = int(argv[2]) if len(argv) > 2 else 10
+            print(json.dumps(get_recent_pipelines(limit)))
             return 0
         if cmd == "schema_version":
             init_db()

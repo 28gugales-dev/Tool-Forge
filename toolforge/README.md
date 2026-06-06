@@ -1,121 +1,282 @@
+<div align="center">
+
 # ToolForge
 
-ToolForge is a Claude Code plugin that discovers the best tools (plugins, MCP servers, and skills) for the task you are about to do. It installs them with one keystroke through a curator skill that searches the live web behind a strict allow-list. It learns which ones actually helped you by collecting a 1 to 5 Likert rating after every session and re-ranking accordingly.
+**Live tool discovery, smart routing, and pipeline orchestration for Claude Code.**
 
-## Pitch
+*Finds what you don't have. Learns what works. Chains what you need.*
 
-Open: "Anthropic Tool Search picks from the tools you already installed. It does not help you find new ones. We do, live from the web, and we learn which ones actually help you."
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Claude%20Code-blueviolet)](https://claude.ai/code)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org)
+[![No external deps](https://img.shields.io/badge/deps-stdlib%20only-green)](pyproject.toml)
 
-Close: "Watch the rating change the ranking."
+</div>
 
-## Architecture at a glance
+> **No ML, no cloud, no accounts. Just SQL.**
 
-```
-+--------------------+        +-------------------------+
-|   /toolforge UI    |  -->   |   toolforge-curator     |
-|   (slash command)  |        |   (skill)               |
-+--------------------+        +------------+------------+
-                                           |
-                       WebSearch + WebFetch | URL allow-list gate
-                                           |
-                          local-scan (~/.claude, project .claude,
-                          configured local_paths, claude plugin/mcp list)
-                                           v
-                              +------------+------------+
-                              |  SQLite-backed ranking  |
-                              |  (stars, recency,       |
-                              |   Bayesian Likert)      |
-                              +------------+------------+
-                                           |
-                                  top 5    v
-                              +------------+------------+
-                              |  user picks one         |
-                              +------------+------------+
-                                           |
-                              +------------+------------+
-                              |  installer (argv        |
-                              |  allow-list gate)       |
-                              +------------+------------+
-                                           |
-                                           v
-                              +-------------------------+
-                              |   SQLite log + ratings  |
-                              +-------------------------+
-```
+---
 
 ## Install
 
-```
+```bash
 claude plugin marketplace add ./toolforge
 claude plugin install toolforge@local-toolforge
 ```
 
-That is it. The plugin auto-registers 4 slash commands, 1 skill, and 2 hooks. No external Python dependencies (stdlib only).
+Done. ToolForge auto-registers slash commands, skills, and hooks. No pip install. No config required.
 
-## What it looks like
+---
 
-Sample `/toolforge-status` output captured from a live session:
+## What you see after one session
 
 ```
 ================ ToolForge Status ================
 Total approved installs:  3
-Current session tool calls:  unknown (no CLAUDE_SESSION_ID in env)
+Current session tool calls:  12
 
-Top 5 rated tools (Bayesian-shrunk decayed score, matches curator ranking):
-  shadcn-ui-mcp                   score 3.62  raw avg 4.67  (3 rating(s))
-  magic-ui                        score 3.27  raw avg 3.50  (6 rating(s))
-  frontend-design                 score 3.00  raw avg 3.00  (1 rating(s))
+Top 5 rated tools (Bayesian-shrunk decayed score):
+  shadcn-ui-mcp         score 3.62  raw avg 4.67  (3 rating(s))
+  magic-ui              score 3.27  raw avg 3.50  (6 rating(s))
+  playwright-testing    score 3.00  raw avg 3.00  (1 rating(s))
 
 Last 5 ratings:
-  2026-05-25T22:01:35.391Z  magic-ui                        5/5
-  2026-05-25T22:01:35.049Z  shadcn-ui-mcp                   4/5
-  2026-05-25T22:01:34.739Z  frontend-design                 3/5
+  2026-05-25T22:01:35Z  magic-ui            5/5
+  2026-05-25T22:01:34Z  shadcn-ui-mcp       4/5
+  2026-05-25T22:01:33Z  playwright-testing  3/5
 ==================================================
+
+Health: all tools healthy.
+Router index: fresh
 ```
+
+The scores you see are not raw averages. They are Bayesian-shrunk Likert ratings with exponential decay (75-day half-life) so a tool's rank fades as AI tooling moves on. The same decay applies everywhere: discovery, routing, and pipeline suggestion.
+
+---
+
+## ToolForge vs. native tool search
+
+Anthropic's built-in tool search works with what you already have installed. ToolForge does three things it cannot:
+
+| | Anthropic Tool Search | ToolForge |
+|---|---|---|
+| Finds new tools | No — discovery is manual | Yes — live web search, gated to 7 trusted hosts |
+| Learns your preferences | No | Yes — Likert ratings re-rank every future result |
+| Routes prompts to the right skill | No | Yes — TF-IDF cosine similarity on every message |
+| Chains skills into pipelines | No | Yes — `/forge` orchestrates multi-phase tasks |
+| Works offline | Yes | Yes — 5-entry fallback cache per category |
+| External dependencies | — | None — pure Python stdlib |
+| Data leaves your machine | — | Never |
+
+Same model. Same prompt. Different tool surface.
+
+---
 
 ## Commands
 
-ToolForge ships 4 slash commands:
-
-| Command | Purpose |
+| Command | What it does |
 |---|---|
-| `/toolforge <category>` | Discover and install top 5 tools for the category. Valid: UI, backend, database, testing, devops. |
-| `/toolforge-status` | Show install count, top 5 rated tools, last 5 ratings. |
-| `/toolforge-rate <1-5>` | Rate the most recently installed tool on a Likert scale. |
-| `/toolforge-rescan` | Clear the 5-minute local-scan cache so the next `/toolforge` invocation rebuilds the local source index from disk. |
+| `/toolforge <category>` | Discover and install the top 5 tools for a category. Valid: `UI`, `backend`, `database`, `testing`, `devops`. |
+| `/toolforge-status` | Live dashboard: install count, top-rated tools, health warnings, router cache status. |
+| `/toolforge-rate <1-5>` | Rate the most recently installed tool. Feeds directly into future rankings. |
+| `/toolforge-rescan` | Force-refresh the local-scan cache and router index after installing or removing tools. |
+| `/toolforge-hunt <task>` | Find the single best skill or MCP server for a specific task, install it, then immediately start working. |
+| `/toolforge-status` | Shows health warnings for stale, archived, or low-rated tools and suggests replacements. |
+| `/forge <multi-phase task>` | Decompose a complex task into a pipeline of skills, show the plan, get approval, then execute each step in sequence. |
 
-## How live discovery works
+---
 
-When you run `/toolforge UI`, the `toolforge-curator` skill is invoked. It:
+## Live discovery — `/toolforge`
 
-1. Runs two `WebSearch` queries in parallel: a general query and a `site:github.com topic:mcp-server <category>` query.
-2. Picks the 3 to 5 most promising URLs.
-3. Runs `WebFetch` against each, locked to an allow-list of 7 trusted hosts: `github.com`, `raw.githubusercontent.com`, `claudemarketplaces.com`, `modelcontextprotocol.io`, `aitmpl.com`, `npmjs.com`, `www.npmjs.com`. The lock is what blocks SEO spam.
-4. Parses each result for name, install command, stars, last commit date, and a one-line description.
-5. Looks up the historical Likert average for each candidate from the local SQLite store via one bulk shell-out.
-6. Computes a composite score blending log-normalized stars, exponential recency with a **75-day half-life**, and a Bayesian-shrunk Likert average (prior mean 3.0, prior weight 5) that also fades old ratings on the same 75-day half-life. AI tooling moves fast — a repo last touched 3 months ago is meaningfully stale; a rating from 6 months ago is no longer evidence of current quality. See `ARCHITECTURE.md` for the exact formula.
-7. Returns the top 5 sorted by score, with install commands ready to copy.
+When you run `/toolforge UI`, the `toolforge-curator` skill fires:
 
-Note on `claude mcp add`: the CLI requires a `--` separator between its own flags and the wrapped install command (for example `claude mcp add foo -- npx -y some-pkg`). The curator and the offline fallback entries both write the `--` separator explicitly so the install line works as-is when you paste it.
+1. **Two parallel WebSearch queries** — a general query and a `site:github.com topic:mcp-server UI` query.
+2. **URL allow-list gate** — every discovered URL is validated against exactly 7 trusted hosts: `github.com`, `raw.githubusercontent.com`, `claudemarketplaces.com`, `modelcontextprotocol.io`, `aitmpl.com`, `npmjs.com`, `www.npmjs.com`. SEO spam that isn't on this list is dropped before it's fetched.
+3. **WebFetch** the top 3–5 surviving URLs. Parse name, install command, stars, last commit date, description.
+4. **Local scan in parallel** — `bin/toolforge_local_scan.py` scans already-installed plugins, user-wide skills, project-scoped skills, and any paths in `~/.claude/toolforge-config.json`. Installed tools get an `[installed]` badge and a +0.10 visibility bonus.
+5. **Bulk DB lookup** — one shell-out to pull historical Likert averages for all candidates.
+6. **Composite score** — `log-stars (0.30) + exp-recency (0.30) + Bayesian Likert (0.40)`. The recency and rating components both decay on a 75-day half-life. A repo last touched 3 months ago is meaningfully stale.
+7. **Security handoff** — before any web-discovered tool installs, a subagent reads the repo, scans for malware, and returns a `clean / suspect / malicious` verdict. Malicious = hard refuse, no override.
+8. **Top 5** sorted by composite score, install commands ready to paste.
 
-If the live pipeline returns fewer than 5 valid candidates or anything takes longer than 10 seconds, ToolForge falls back to a hand-curated offline cache in `fallback/<category>.json` (5 known good entries per category). The demo still runs with the network cable unplugged.
+If live discovery returns fewer than 5 valid candidates, ToolForge merges in the offline fallback cache (`fallback/<category>.json`, integrity-checked against `fallback/manifest.sha256`). The demo runs with the network cable unplugged.
+
+---
+
+## Auto-router — skills that find you
+
+ToolForge v0.2 adds a `UserPromptSubmit` hook that fires before every message. It reads your prompt, scores it against every installed skill using TF-IDF cosine similarity, and injects a `<system-reminder>` nudge into the context when a strong match exists.
+
+```
+[ToolForge router] Relevant skills for this prompt:
+  1. playwright-testing  (score: 0.71) — "Write browser tests..."
+  2. sql-schema          (score: 0.58) — "Generate SQL schema..."
+```
+
+**Shadow mode (default)**: the router logs what it would have suggested but injects nothing. Runs for 7 days collecting data. If the false-positive rate stays below 15%, you can promote it to active mode in `~/.claude/toolforge-config.json`:
+
+```json
+{ "router_mode": "active" }
+```
+
+**Why TF-IDF, not an embedding model?** Because ToolForge runs inside every prompt, inline, with an 80ms wall-clock budget. No API call, no model load, no tokens consumed. The router adds ~0 to your context usage.
+
+The router index rebuilds itself every hour or on `/toolforge-rescan`. Stop-word filtering removes generic programming verbs (`write`, `add`, `fix`, `create`) that would otherwise match everything.
+
+---
+
+## `/forge` — pipeline orchestrator
+
+`/forge` is for tasks with multiple distinct phases: design something, then implement it, then test it, then review it.
+
+```
+/forge build a user auth system with a postgres schema, JWT endpoints,
+       playwright E2E tests, and a security code review
+```
+
+ToolForge decomposes the task into 2–6 ordered sub-tasks, routes each to the best installed skill, renders a plan, and waits for your approval before touching a line of code:
+
+```
+============================================================
+forge: "build user auth with schema, JWT, tests, review"
+============================================================
+
+  1. sql-schema           Design the postgres users/sessions schema  [0.72]
+                        |
+  2. (built-in)           Implement the JWT auth endpoints
+                        |
+  3. playwright-testing   Write E2E login and logout tests  [0.61]
+                        |
+  4. code-review          Security review of the implementation  [0.58]
+
+  3 skill(s)  |  1 built-in step(s)
+
+  Proceed? [Y/n]  Skip a step? (type 'skip N')  Edit? (type step number)
+```
+
+Once you approve, forge executes each step in sequence — each step receives a context summary from the previous one (capped at 500 words so the context window stays clean). On completion, the skill chain is saved to SQLite and will be suggested the next time someone asks forge for a similar task.
+
+**The seven phases:**
+
+| Phase | What happens |
+|---|---|
+| 1. Decompose | Parse for action verbs, sequential connectors, implicit phases |
+| 2. Route | Score each sub-task against installed skills in parallel |
+| 3. History | Check if this exact skill chain has run before; offer to reuse the saved template |
+| 4. Plan | Render the ASCII flowchart and wait for Y/n/skip/edit |
+| 5. Install | If any required skills are missing, security review + install in one batch |
+| 6. Execute | Run each step in sequence with context flowing between them |
+| 7. Save | Persist the chain; prompt to rate each skill used |
+
+Forge never starts work before phase 4. Decompose and plan first, always.
+
+---
+
+## `/toolforge-hunt` — task-specific search
+
+`/toolforge-hunt` is for when you know exactly what you need to do but don't have the right tool yet.
+
+```
+/toolforge-hunt animate a React component with GSAP scroll triggers
+```
+
+The hunter runs three parallel targeted WebSearch queries, fetches and parses the top results, and scores candidates by task relevance (40% capability match, 25% stack fit, 20% stars + recency, 15% Likert history). It surfaces the top 3 candidates, runs the security review, installs your pick, and immediately starts working on the task — no second prompt needed.
+
+Use `/toolforge-hunt` for targeted one-off capability acquisition. Use `/forge` when the task has multiple phases.
+
+---
+
+## The learning loop
+
+Every session:
+
+1. A `PostToolUse` hook counts every `Edit`, `Write`, and `Bash` call.
+2. On `SessionEnd`, if the session crossed 5 tool calls, ToolForge asks you to rate the most recently installed tool with `/toolforge-rate 1-5`.
+3. The rating is written to `~/.claude/toolforge.db`.
+4. The next `/toolforge` run pulls the Bayesian-shrunk decayed average for every candidate and re-ranks accordingly.
+
+**Bayesian shrinkage** means a tool with two 5-star ratings doesn't leapfrog a tool with forty 4-star ratings. The prior is mean 3.0, weight 5 — a new tool starts in the middle and earns its rank through evidence. **Exponential decay** (75-day half-life) means a 5-star rating from last year carries about one-quarter the weight of one from this week.
+
+No ML. No cloud sync. No accounts. The entire learning system is three SQL queries.
+
+---
+
+## Health monitoring
+
+`/toolforge-status` runs a passive health scan (cached 6 hours) and flags:
+
+| Flag | Meaning |
+|---|---|
+| `stale` | Tool hasn't been used in 90+ days |
+| `dormant` | Tool was installed but never used in any session |
+| `low-rated` | Bayesian average < 2.5 with at least 3 ratings |
+| `archived` | Tool's repo is marked archived or deprecated |
+| `inactive` | Upstream repo has been silent for 90+ days |
+
+When flags are found, `/toolforge-status` suggests `/toolforge-hunt <task>` to find a replacement.
+
+---
+
+## Security
+
+<details>
+<summary>URL allow-list, install sandbox, and prompt-injection defense</summary>
+
+### URL allow-list
+
+Every URL — whether from WebSearch results, README links, or "see also" pointers inside fetched pages — is validated by `bin/toolforge_validate_url.py` before WebFetch is called. The allow-list is exactly 7 hosts:
+
+- `github.com`
+- `raw.githubusercontent.com`
+- `claudemarketplaces.com`
+- `modelcontextprotocol.io`
+- `aitmpl.com`
+- `npmjs.com`
+- `www.npmjs.com`
+
+The validator performs IDN canonicalization, rejects control bytes, enforces HTTPS-only, and strips any URL the model discovers inside fetched content before re-validating it. Instructions inside a fetched README that tell the curator to widen `allowed_domains` are silently ignored.
+
+### Install command sandbox
+
+Install commands go through `bin/toolforge_install.py`:
+
+1. Reject any command containing shell metacharacters (`;`, `&`, `|`, backtick, `<`, `>`, newlines).
+2. `shlex.split` and require `argv[0]` in the explicit allow-list: `claude`, `npx`, `uvx`, `npm`, `pip`, `pipx`, `uv`.
+3. Resolve through `shutil.which` and reject user-writable PATH locations (`~/.local/bin`, `%LOCALAPPDATA%`, `~/AppData/Roaming/npm`, `node_modules/.bin`).
+4. Run with `shell=False`, `capture_output=True`.
+5. Log the result (approved or refused) to SQLite before executing.
+
+Batch installs are fail-fast: if any command in the batch fails validation, the entire batch aborts before any installer runs.
+
+### Semantic security handoff
+
+Before any web-discovered tool installs, a subagent reads the repo, scans for known malware patterns, and returns `clean / suspect / malicious`:
+
+- `clean` → proceed
+- `suspect` → show the user the first 3 findings; ask for explicit confirmation; default no
+- `malicious` → hard refuse; no override path
+
+Local-source tools (already-installed plugins, user-wide skills, project-scoped skills) skip the handoff — they live under user-trusted paths.
+
+### Auto-router injection safety
+
+Descriptions injected into `<system-reminder>` tags by the auto-router are sanitized with a strict character allow-list (`[A-Za-z0-9 ._,;:!?()-/]`), capped at 100 chars each, and stripped of any `<system-reminder>` tags before injection. The total injection is capped at 500 chars and the router always returns exit 0 — it never blocks a prompt.
+
+</details>
+
+---
 
 ## Local sources
 
-Live discovery is half the picture. The other half is what is already on your machine. In parallel with `WebSearch`, the curator skill runs `bin/toolforge_local_scan.py`, which produces a ranked list of locally-available candidates per category and folds them into the same bulk DB lookup and composite scoring as live entries.
+<details>
+<summary>What gets scanned, in what order, and how to add custom paths</summary>
 
-What it scans, in order:
+`bin/toolforge_local_scan.py` runs in parallel with WebSearch on every `/toolforge` invocation. It scans:
 
-1. `claude plugin list` and `claude mcp list`: already-installed plugins and MCP servers. These get an `[installed]` badge in the output and a `+0.10` visibility bonus in the composite score so you see what you already have before being asked to install something new.
-2. `~/.claude/skills/` and `~/.claude/agents/`: user-wide skills and agents.
-3. `<cwd>/.claude/skills/` and `<cwd>/.claude/agents/`: project-scoped skills and agents.
-4. Any absolute paths listed in the `local_paths` array of `~/.claude/toolforge-config.json`. This is the opt-in slot for reference repositories, internal shared catalogs, or a hand-built skill garden. The plugin ships no defaults for this list. The intent is that ToolForge is not a hardcoded catalog; users opt in to local repos by editing this file.
-
-Per-entry schema for local candidates: `name`, `type`, `source`, `path`, `installed`, `description`, `category_score`, `stars_norm` (fixed at 0.4 for local entries since star counts do not apply), `recency_norm` (exponential decay from `git log -1 --format=%ct` when the source is a git repo, otherwise file mtime), and `category`. Categorization is keyword-based with per-category keyword sets, a drop threshold of 0.3, and a cap of 10 entries per category. See `ARCHITECTURE.md` for the verbatim keyword lists and the security caps that bound the scan.
-
-Results are cached at `tempdir/toolforge_local_scan_<category>.json` for 5 minutes. To force a refresh (after installing a new plugin, deleting a local skill, or editing `local_paths`), run `/toolforge-rescan`.
-
-Sample `~/.claude/toolforge-config.json`:
+1. **`claude plugin list` and `claude mcp list`** — already-installed plugins and MCP servers. These get an `[installed]` badge and a +0.10 visibility bonus in the composite score.
+2. **`~/.claude/skills/` and `~/.claude/agents/`** — user-wide skills and agents.
+3. **`<cwd>/.claude/skills/` and `<cwd>/.claude/agents/`** — project-scoped skills and agents.
+4. **`local_paths` in `~/.claude/toolforge-config.json`** — opt-in slot for reference repositories, internal shared catalogs, or a hand-built skill garden:
 
 ```json
 {
@@ -126,83 +287,77 @@ Sample `~/.claude/toolforge-config.json`:
 }
 ```
 
-If the config file is missing, malformed, or unreadable, the scanner falls back to defaults silently and prints a one-line stderr warning. The `local_paths` entries are canonicalized before scanning; path-escape attempts via `..` or symlinks are dropped, not followed.
+Path entries are canonicalized before scanning. `..` traversal and symlinks that escape the declared path are dropped, not followed. If the config file is missing or malformed, the scanner falls back to defaults silently.
 
-## How the Likert learning loop works
+Results are cached at `tempdir/toolforge_local_scan_<category>.json` for 5 minutes. Run `/toolforge-rescan` to force a rebuild.
 
-1. A `PostToolUse` hook increments a per-session counter on every `Edit`, `Write`, or `Bash` tool call.
-2. On `SessionEnd`, if the session crossed 5 tool calls, ToolForge emits a friendly prompt asking the user to rate the most recently installed tool with `/toolforge-rate <1-5>`.
-3. The rating is written to a `ratings` table in `~/.claude/toolforge.db`.
-4. The next time `/toolforge` runs for any category, the composite score pulls the Bayesian-shrunk decayed average per candidate and re-ranks accordingly.
+</details>
 
-That is the self-learning loop. No ML, no cloud, no accounts. Just SQL.
-
-## Security
-
-URLs are gated by a hard allow-list locked to the 7 trusted hosts listed above, enforced by `bin/toolforge_validate_url.py` (IDN canonicalization, control-byte rejection, scheme check). Prompt-injection defense requires re-validating any URL the model discovers inside a fetched page (README links, redirects, "see also" pointers) before passing it to a second `WebFetch`. Instructions inside fetched content that ask the curator to widen `allowed_domains` are ignored.
-
-Install commands are validated by an argv allow-list (only known-good binaries like `npx`, `pip`, `claude`, `uvx`), executed with `shell=False`, and resolved through `shutil.which` with refusal for user-writable bins to defeat PATH hijacking. Tool names are constrained to `^[a-z0-9._@/-]{1,80}$` upstream and at the database write boundary. See `ARCHITECTURE.md` for the full security table.
-
-## Offline fallback
-
-Every category has a 5-entry JSON cache at `fallback/<category>.json`. The cache is intentionally small. If live discovery fails or times out, ToolForge surfaces these 5 instead. You will see a one-line notice: "Live discovery unavailable, falling back to cached results." The fallback files are integrity-checked against `fallback/manifest.sha256` before they are loaded; a mismatch refuses to load rather than silently running a tampered install command.
+---
 
 ## Storage
 
-All ToolForge data lives in `~/.claude/toolforge.db`:
+All ToolForge data lives in `~/.claude/toolforge.db` (SQLite, schema v3):
 
-- `installs` table: tool_name, category, approved, installed_at
-- `ratings` table: tool_name, rating (1 to 5), rated_at
+| Table | Contents |
+|---|---|
+| `installs` | tool_name, category, approved, installed_at |
+| `ratings` | tool_name, rating (1–5), rated_at |
+| `usage_stats` | tool_name, session_id, call_count, session_date |
+| `routing_scores` | prompt_hash, skill_name, score, routed_at |
+| `pipelines` | task_desc, steps_hash, steps_json, success, run_at |
 
-To inspect manually:
-
-```
+```bash
+# Inspect
 python toolforge/bin/toolforge_db.py status
-```
 
-To reset:
-
-```
+# Reset everything
 rm ~/.claude/toolforge.db
 ```
 
-## Roadmap
+The `pipelines` table lets forge recognize when it has run a skill chain before and offer the saved template instead of re-routing from scratch. Pipeline similarity is keyed by `steps_hash`, a 16-char SHA-256 of the ordered skill-name chain — so `[code-review, playwright-testing]` and `[playwright-testing, code-review]` are different keys.
 
-### v0.2
-
-- Proactive scanning every other day: a cron-friendly script that refreshes a local catalog and surfaces newly trending tools without waiting for `/toolforge` to be invoked.
-
-  Example cron line on macOS or Linux:
-
-  ```
-  0 9 */2 * * python ~/.claude/plugins/toolforge/bin/toolforge_scan.py
-  ```
-
-### v0.3
-
-- Cloud sync of ratings (opt-in, anonymous): aggregate Likert ratings across users so the cold-start ranking is already useful.
-- ML-based ranking: replace the hand-tuned weights with a small learned ranker that adapts per category and per user.
-
-### v0.4
-
-- Per-user telemetry opt-in for live trending discovery (still no accounts; uses anonymized hash IDs).
-
-### Explicit non-goals for v1
-
-- Multi-user accounts. SQLite local only.
-- Auto-application orchestration. Claude Code already activates installed plugins on the next message.
-- Custom TUI. Plain stdout is fine.
-- More than 5 categories. UI, backend, database, testing, devops cover the demo.
+---
 
 ## Companion docs
 
-- `ARCHITECTURE.md`: full ranking formula, security table, data flow.
-- `TROUBLESHOOTING.md`: common install and runtime issues.
-- `SKETCHY_CODE_AUDIT.md`: known issues, doc/code drift, future-risk spots. In-source `# WARN:` comments point to anchors here.
-- `CHANGELOG.md`: version history.
-- `CONTRIBUTING.md`: how to add a category or extend the curator.
-- `demo/demo_script.md`: the live demo walkthrough.
+| File | Contents |
+|---|---|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Full ranking formula, composite score weights, security table, data flow diagram |
+| [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Common install and runtime issues |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to add a category or extend the curator |
+| [CHANGELOG.md](CHANGELOG.md) | Version history |
+| [SKETCHY\_CODE\_AUDIT.md](SKETCHY_CODE_AUDIT.md) | Known issues, doc/code drift, future-risk spots |
+| [demo/demo\_script.md](demo/demo_script.md) | Live demo walkthrough with speaker notes |
+
+---
+
+## Roadmap
+
+### v0.2 (shipped)
+- [x] TF-IDF auto-router — `UserPromptSubmit` hook routes every prompt to matching skills
+- [x] `/toolforge-hunt` — task-specific skill search, install, and immediate execution
+- [x] `/forge` — pipeline orchestrator: decompose → route → plan → execute → save
+- [x] Health monitoring — stale, dormant, archived, inactive, and low-rated tool detection
+- [x] Pipeline persistence — SQLite `pipelines` table with similarity matching for chain reuse
+- [x] Schema v3 migration — backward-compatible upgrade from v2
+
+### v0.3 (planned)
+- Proactive scheduled scan — cron-friendly script that surfaces newly trending tools without waiting for `/toolforge`
+- Cloud Likert sync (opt-in, anonymous) — aggregate ratings across users for better cold-start ranking
+
+### v0.4 (exploring)
+- Per-user telemetry opt-in for live trending discovery (anonymized hash IDs, no accounts)
+- Router active-mode auto-promotion after shadow validation window
+
+### Explicit non-goals through v1
+- Multi-user accounts — SQLite local only
+- Auto-install without consent — zero-click crosses into supply-chain attack surface
+- Custom TUI — plain stdout is intentional
+- More than 5 base categories — UI, backend, database, testing, devops cover the current surface area
+
+---
 
 ## License
 
-MIT.
+[MIT](LICENSE)
