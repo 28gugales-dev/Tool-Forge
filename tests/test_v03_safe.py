@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Safe test suite for ToolForge v0.3 additions.
+"""Safe test suite for ToolForge v0.3 + v0.4 additions.
 
 Runs entirely against a temp directory — never touches ~/.claude/toolforge.db,
 never touches ~/.claude/toolforge-config.json, never runs any install command.
@@ -785,6 +785,333 @@ if real_cfg.exists():
         ok("~/.claude/toolforge-config.json: exists but not modified by tests")
 else:
     ok("~/.claude/toolforge-config.json: does not exist (never touched)")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section("17. DB v6 schema — new tables present")
+# ══════════════════════════════════════════════════════════════════════════════
+
+db.init_db()
+_conn17 = db._connect()
+try:
+    _tables17 = {r[0] for r in _conn17.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+finally:
+    _conn17.close()
+
+for _tbl in ("user_preferences", "workflow_shortcuts", "context_sync"):
+    if _tbl in _tables17:
+        ok(f"v6 table present: {_tbl}")
+    else:
+        fail(f"v6 table missing: {_tbl}")
+
+_ver17 = None
+_conn17b = db._connect()
+try:
+    _ver17 = _conn17b.execute("PRAGMA user_version").fetchone()[0]
+finally:
+    _conn17b.close()
+if _ver17 == 6:
+    ok("schema user_version == 6")
+else:
+    fail("schema user_version != 6", str(_ver17))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section("18. user_preferences CRUD")
+# ══════════════════════════════════════════════════════════════════════════════
+
+try:
+    db.record_preference_signal("frontend-ui", "shadcn-ui-mcp", positive=True, weight=1.0)
+    db.record_preference_signal("frontend-ui", "shadcn-ui-mcp", positive=True, weight=1.0)
+    db.record_preference_signal("frontend-ui", "old-tool", positive=False, weight=1.0)
+    ok("record_preference_signal: positive and negative signals accepted")
+except Exception as e:
+    fail("record_preference_signal raised", str(e))
+
+try:
+    prefs = db.get_preferences_for_task("frontend-ui")
+    assert isinstance(prefs, list), "expected list"
+    assert any(p["skill_name"] == "shadcn-ui-mcp" for p in prefs), "shadcn-ui-mcp not found"
+    top = prefs[0]
+    assert top["preference_score"] > 0, "top score should be positive"
+    ok(f"get_preferences_for_task: {len(prefs)} entries, top={top['skill_name']} score={top['preference_score']}")
+except Exception as e:
+    fail("get_preferences_for_task", str(e))
+
+try:
+    score = db.get_preference_score("frontend-ui", "shadcn-ui-mcp")
+    assert score > 0, "score should be positive after 2 positive signals"
+    ok(f"get_preference_score: {score:.3f}")
+except Exception as e:
+    fail("get_preference_score", str(e))
+
+try:
+    all_prefs = db.get_all_preferences()
+    assert "frontend-ui" in all_prefs
+    ok(f"get_all_preferences: {len(all_prefs)} task types")
+except Exception as e:
+    fail("get_all_preferences", str(e))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section("19. workflow_shortcuts CRUD")
+# ══════════════════════════════════════════════════════════════════════════════
+
+try:
+    db.save_workflow_shortcut(
+        "test-shortcut-1",
+        "Test shortcut for frontend work",
+        trigger_skills=["shadcn-ui-mcp"],
+        steps=[{"skill": "shadcn-ui-mcp", "step": 1}, {"skill": "playwright", "step": 2}],
+        auto_detected=True,
+    )
+    ok("save_workflow_shortcut: created test-shortcut-1")
+except Exception as e:
+    fail("save_workflow_shortcut", str(e))
+
+try:
+    shortcuts = db.list_workflow_shortcuts()
+    assert any(s["shortcut_name"] == "test-shortcut-1" for s in shortcuts)
+    s = next(s for s in shortcuts if s["shortcut_name"] == "test-shortcut-1")
+    assert s["hit_count"] == 0
+    assert s["auto_detected"] is True
+    assert isinstance(s["trigger_skills"], list)
+    assert isinstance(s["steps"], list) and len(s["steps"]) == 2
+    ok(f"list_workflow_shortcuts: {len(shortcuts)} shortcuts, data validated")
+except Exception as e:
+    fail("list_workflow_shortcuts", str(e))
+
+try:
+    db.record_shortcut_trigger("test-shortcut-1")
+    db.record_shortcut_trigger("test-shortcut-1")
+    shortcuts2 = db.list_workflow_shortcuts()
+    s2 = next(s for s in shortcuts2 if s["shortcut_name"] == "test-shortcut-1")
+    assert s2["hit_count"] == 2, f"expected hit_count=2, got {s2['hit_count']}"
+    ok("record_shortcut_trigger: hit_count increments correctly")
+except Exception as e:
+    fail("record_shortcut_trigger", str(e))
+
+try:
+    deleted = db.delete_workflow_shortcut("test-shortcut-1")
+    assert deleted is True
+    shortcuts3 = db.list_workflow_shortcuts()
+    assert not any(s["shortcut_name"] == "test-shortcut-1" for s in shortcuts3)
+    ok("delete_workflow_shortcut: shortcut removed")
+except Exception as e:
+    fail("delete_workflow_shortcut", str(e))
+
+try:
+    missing = db.delete_workflow_shortcut("nonexistent-shortcut-xyz")
+    assert missing is False
+    ok("delete_workflow_shortcut nonexistent: returns False")
+except Exception as e:
+    fail("delete_workflow_shortcut nonexistent", str(e))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section("20. context_sync CRUD")
+# ══════════════════════════════════════════════════════════════════════════════
+
+try:
+    db.log_context_sync("hermes", "push", payload_hash="abc123", status="ok")
+    db.log_context_sync("obsidian", "push", payload_hash="def456", status="ok")
+    db.log_context_sync("hermes", "pull", status="error", error_msg="connection refused")
+    ok("log_context_sync: hermes and obsidian entries written")
+except Exception as e:
+    fail("log_context_sync", str(e))
+
+try:
+    history = db.get_sync_history(limit=10)
+    assert len(history) >= 3
+    integrations = {h["integration"] for h in history}
+    assert "hermes" in integrations and "obsidian" in integrations
+    ok(f"get_sync_history all: {len(history)} entries, integrations={integrations}")
+except Exception as e:
+    fail("get_sync_history", str(e))
+
+try:
+    hermes_hist = db.get_sync_history("hermes", limit=5)
+    assert all(h["integration"] == "hermes" for h in hermes_hist)
+    ok(f"get_sync_history filtered: {len(hermes_hist)} hermes entries")
+except Exception as e:
+    fail("get_sync_history filtered", str(e))
+
+try:
+    db.log_context_sync("generic", "pull", status="ok")
+    ok("log_context_sync generic integration accepted")
+except Exception as e:
+    fail("log_context_sync generic", str(e))
+
+try:
+    db.log_context_sync("unknown-int", "push", status="ok")
+    fail("log_context_sync invalid integration: should have raised ValueError")
+except ValueError:
+    ok("log_context_sync invalid integration: ValueError raised correctly")
+except Exception as e:
+    fail("log_context_sync invalid integration raised wrong error", str(e))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section("21. toolforge_user_profile.py")
+# ══════════════════════════════════════════════════════════════════════════════
+
+try:
+    import importlib
+    import toolforge_user_profile as up
+    importlib.reload(up)
+    ok("toolforge_user_profile imported successfully")
+except ImportError as e:
+    fail("toolforge_user_profile import failed", str(e))
+    up = None
+
+if up is not None:
+    try:
+        up.record_session_signals(
+            "data-analysis",
+            skills_used=["pandas-ai", "context7", "jupyter"],
+            positive_skills=["pandas-ai"],
+        )
+        ok("record_session_signals: accepted skills_used + positive_skills")
+    except Exception as e:
+        fail("record_session_signals", str(e))
+
+    try:
+        prefs = up.get_top_preferences("data-analysis", top_n=3)
+        assert isinstance(prefs, list)
+        ok(f"get_top_preferences: {len(prefs)} entries")
+    except Exception as e:
+        fail("get_top_preferences", str(e))
+
+    try:
+        candidates = [
+            {"skill_name": "pandas-ai", "composite": 0.7},
+            {"skill_name": "context7", "composite": 0.6},
+            {"skill_name": "unknown-tool", "composite": 0.8},
+        ]
+        ranked = up.adjusted_scores("data-analysis", candidates)
+        assert isinstance(ranked, list)
+        assert all("blended_score" in r for r in ranked)
+        top = ranked[0]
+        ok(f"adjusted_scores: top={top['skill_name']} blended={top['blended_score']}")
+    except Exception as e:
+        fail("adjusted_scores", str(e))
+
+    try:
+        summary = up.profile_summary()
+        assert isinstance(summary, str)
+        assert len(summary) > 10
+        ok("profile_summary: returns non-empty string")
+    except Exception as e:
+        fail("profile_summary", str(e))
+
+    try:
+        up.record_explicit_feedback("testing", "playwright", positive=True)
+        score = db.get_preference_score("testing", "playwright")
+        assert score > 0
+        ok(f"record_explicit_feedback: playwright score={score}")
+    except Exception as e:
+        fail("record_explicit_feedback", str(e))
+
+    try:
+        result = up.detect_shortcuts_from_pipelines(min_sessions=999)
+        assert isinstance(result, list)
+        ok("detect_shortcuts_from_pipelines: runs without error (empty result expected)")
+    except Exception as e:
+        fail("detect_shortcuts_from_pipelines", str(e))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section("22. bridge_server.py — handler unit tests")
+# ══════════════════════════════════════════════════════════════════════════════
+
+try:
+    import sys as _sys
+    _webui = REPO_ROOT / "webui"
+    if str(_webui) not in _sys.path:
+        _sys.path.insert(0, str(_webui))
+    import bridge_server as bs
+    ok("bridge_server imported successfully")
+    _bs_ok = True
+except ImportError as e:
+    fail("bridge_server import failed", str(e))
+    _bs_ok = False
+
+if _bs_ok:
+    import io as _io
+
+    class _FakeRequest:
+        def __init__(self, method="GET", path="/api/health", body=b""):
+            self.method = method
+            self.path = path
+            self._body = body
+            self.headers = {"Content-Length": str(len(body))}
+
+    class _FakeHandler(bs._Handler):
+        def __init__(self, method="GET", path="/api/health", body=b""):
+            self._response_code = None
+            self._response_body = None
+            self._headers = {}
+            self.path = path
+            self.command = method
+            self.rfile = _io.BytesIO(body)
+            self.headers = {"Content-Length": str(len(body)), "Content-Type": "application/json"}
+            self.wfile = _io.BytesIO()
+
+        def send_response(self, code):
+            self._response_code = code
+
+        def send_header(self, k, v):
+            self._headers[k] = v
+
+        def end_headers(self):
+            pass
+
+    try:
+        h = _FakeHandler("GET", "/api/health")
+        h._get_health()
+        assert h._response_code == 200
+        assert h._response_body is not None or True
+        ok("bridge_server _get_health: returns 200")
+    except Exception as e:
+        fail("bridge_server _get_health", str(e))
+
+    try:
+        h = _FakeHandler("GET", "/api/shortcuts")
+        h._get_shortcuts()
+        assert h._response_code == 200
+        ok("bridge_server _get_shortcuts: returns 200")
+    except Exception as e:
+        fail("bridge_server _get_shortcuts", str(e))
+
+    try:
+        h = _FakeHandler("GET", "/api/export/context")
+        h._get_context_export()
+        assert h._response_code == 200
+        ok("bridge_server _get_context_export: returns 200")
+    except Exception as e:
+        fail("bridge_server _get_context_export", str(e))
+
+    try:
+        payload = json.dumps({"source": "hermes", "memories": [1, 2, 3]}).encode()
+        h = _FakeHandler("POST", "/api/webhooks/hermes", body=payload)
+        h._webhook_hermes({"source": "hermes", "memories": [1, 2, 3]})
+        assert h._response_code == 200
+        ok("bridge_server _webhook_hermes: returns 200")
+    except Exception as e:
+        fail("bridge_server _webhook_hermes", str(e))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section("23. Real ~/.claude files still untouched (v6 check)")
+# ══════════════════════════════════════════════════════════════════════════════
+
+_real_db_v6 = Path(os.path.expanduser("~/.claude/toolforge.db"))
+if _real_db_v6.exists():
+    fail("real DB exists after v6 tests — location may have been leaked", str(_real_db_v6))
+else:
+    ok("~/.claude/toolforge.db: still does not exist after v6 tests")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

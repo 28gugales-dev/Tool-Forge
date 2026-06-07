@@ -27,7 +27,7 @@ from typing import Optional
 DB_PATH = Path(os.path.expanduser("~/.claude/toolforge.db"))
 # Canonical decay half-life. Imported by toolforge_local_scan.py and webui/inventory.py.
 DECAY_HALFLIFE_DAYS = 75.0  # AI tooling moves fast — was 180d, cut to ~2.5mo
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 BAYES_PRIOR_MEAN = 3.0
 BAYES_PRIOR_WEIGHT = 5.0
 
@@ -217,6 +217,49 @@ def init_db() -> None:
                     token_avg       REAL NOT NULL DEFAULT 0.0,
                     last_measured   TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
                 );
+                """
+            )
+        if current < 6:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS user_preferences (
+                    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_type_id      TEXT NOT NULL,
+                    skill_name        TEXT NOT NULL,
+                    preference_score  REAL NOT NULL DEFAULT 0.0,
+                    positive_signals  INTEGER NOT NULL DEFAULT 0,
+                    negative_signals  INTEGER NOT NULL DEFAULT 0,
+                    last_observed     TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                    UNIQUE(task_type_id, skill_name)
+                );
+                CREATE INDEX IF NOT EXISTS idx_prefs_task
+                    ON user_preferences(task_type_id);
+                CREATE INDEX IF NOT EXISTS idx_prefs_skill
+                    ON user_preferences(skill_name);
+
+                CREATE TABLE IF NOT EXISTS workflow_shortcuts (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    shortcut_name   TEXT UNIQUE,
+                    description     TEXT,
+                    trigger_skills  TEXT NOT NULL DEFAULT '[]',
+                    steps_json      TEXT NOT NULL DEFAULT '[]',
+                    hit_count       INTEGER NOT NULL DEFAULT 0,
+                    auto_detected   INTEGER NOT NULL DEFAULT 1,
+                    created_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                    last_triggered  TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS context_sync (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    integration   TEXT NOT NULL,
+                    direction     TEXT NOT NULL,
+                    payload_hash  TEXT,
+                    status        TEXT NOT NULL DEFAULT 'pending',
+                    error_msg     TEXT,
+                    synced_at     TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_sync_int
+                    ON context_sync(integration, synced_at DESC);
                 """
             )
         if current < SCHEMA_VERSION:
@@ -1083,6 +1126,218 @@ def get_skill_performance_all() -> list[dict]:
     return result
 
 
+# ---------- section: user-preferences-v6 ----------
+
+
+def record_preference_signal(task_type_id: str, skill_name: str,
+                              positive: bool, weight: float = 1.0) -> None:
+    """Record one positive or negative preference signal for a skill/task combination.
+
+    Preference score uses an additive model with decay ceiling:
+      positive: +0.15 * weight, capped at +2.0
+      negative: -0.08 * weight, floored at -1.0
+    """
+    delta = 0.15 * weight if positive else -0.08 * weight
+    name = _validate_tool_name(skill_name)
+    init_db()
+    conn = _connect()
+    try:
+        conn.execute(
+            """INSERT INTO user_preferences
+               (task_type_id, skill_name, preference_score, positive_signals, negative_signals)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(task_type_id, skill_name) DO UPDATE SET
+                 preference_score = MAX(-1.0, MIN(2.0,
+                     preference_score + ?)),
+                 positive_signals = positive_signals + ?,
+                 negative_signals = negative_signals + ?,
+                 last_observed = strftime('%Y-%m-%dT%H:%M:%fZ','now')""",
+            (task_type_id, name, delta,
+             1 if positive else 0, 0 if positive else 1,
+             delta, 1 if positive else 0, 0 if positive else 1),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_preferences_for_task(task_type_id: str) -> list[dict]:
+    """Return skills ranked by preference score for a task type (descending)."""
+    init_db()
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            """SELECT skill_name, preference_score, positive_signals, negative_signals
+               FROM user_preferences
+               WHERE task_type_id = ?
+               ORDER BY preference_score DESC""",
+            (task_type_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [
+        {"skill_name": r[0], "preference_score": round(r[1], 3),
+         "positive_signals": r[2], "negative_signals": r[3]}
+        for r in rows
+    ]
+
+
+def get_all_preferences() -> dict[str, list[dict]]:
+    """Return all preferences grouped by task_type_id."""
+    init_db()
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            """SELECT task_type_id, skill_name, preference_score
+               FROM user_preferences
+               ORDER BY task_type_id, preference_score DESC"""
+        ).fetchall()
+    finally:
+        conn.close()
+    result: dict[str, list[dict]] = {}
+    for task_id, skill, score in rows:
+        result.setdefault(task_id, []).append(
+            {"skill_name": skill, "preference_score": round(score, 3)}
+        )
+    return result
+
+
+def get_preference_score(task_type_id: str, skill_name: str) -> float:
+    """Return the preference score for a specific task/skill pair (0.0 if unknown)."""
+    init_db()
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT preference_score FROM user_preferences WHERE task_type_id=? AND skill_name=?",
+            (task_type_id, _normalize(skill_name)),
+        ).fetchone()
+    finally:
+        conn.close()
+    return round(row[0], 3) if row else 0.0
+
+
+# ---------- section: workflow-shortcuts-v6 ----------
+
+
+def save_workflow_shortcut(shortcut_name: str, description: str,
+                           trigger_skills: list[str], steps: list[dict],
+                           auto_detected: bool = True) -> None:
+    if not shortcut_name or not re.match(r"^[a-z0-9._-]{1,60}$", shortcut_name):
+        raise ValueError(f"invalid shortcut_name {shortcut_name!r}")
+    init_db()
+    conn = _connect()
+    try:
+        conn.execute(
+            """INSERT INTO workflow_shortcuts
+               (shortcut_name, description, trigger_skills, steps_json, auto_detected)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(shortcut_name) DO UPDATE SET
+                 description=excluded.description,
+                 trigger_skills=excluded.trigger_skills,
+                 steps_json=excluded.steps_json""",
+            (shortcut_name, description, json.dumps(trigger_skills),
+             json.dumps(steps), 1 if auto_detected else 0),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def record_shortcut_trigger(shortcut_name: str) -> None:
+    init_db()
+    conn = _connect()
+    try:
+        conn.execute(
+            """UPDATE workflow_shortcuts SET
+               hit_count = hit_count + 1,
+               last_triggered = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+               WHERE shortcut_name=?""",
+            (shortcut_name,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_workflow_shortcuts() -> list[dict]:
+    init_db()
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            """SELECT shortcut_name, description, trigger_skills, steps_json,
+                      hit_count, auto_detected, created_at, last_triggered
+               FROM workflow_shortcuts ORDER BY hit_count DESC"""
+        ).fetchall()
+    finally:
+        conn.close()
+    return [
+        {
+            "shortcut_name": r[0], "description": r[1],
+            "trigger_skills": json.loads(r[2]),
+            "steps": json.loads(r[3]),
+            "hit_count": r[4], "auto_detected": bool(r[5]),
+            "created_at": r[6], "last_triggered": r[7],
+        }
+        for r in rows
+    ]
+
+
+def delete_workflow_shortcut(shortcut_name: str) -> bool:
+    init_db()
+    conn = _connect()
+    try:
+        cur = conn.execute("DELETE FROM workflow_shortcuts WHERE shortcut_name=?", (shortcut_name,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+# ---------- section: context-sync-v6 ----------
+
+
+def log_context_sync(integration: str, direction: str,
+                     payload_hash: Optional[str] = None,
+                     status: str = "ok", error_msg: Optional[str] = None) -> None:
+    if integration not in {"hermes", "obsidian", "webhook", "generic"}:
+        raise ValueError(f"unknown integration {integration!r}")
+    if direction not in {"push", "pull"}:
+        raise ValueError(f"direction must be 'push' or 'pull'")
+    init_db()
+    conn = _connect()
+    try:
+        conn.execute(
+            "INSERT INTO context_sync (integration, direction, payload_hash, status, error_msg) VALUES (?,?,?,?,?)",
+            (integration, direction, payload_hash, status, error_msg),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_sync_history(integration: Optional[str] = None, limit: int = 20) -> list[dict]:
+    init_db()
+    conn = _connect()
+    try:
+        if integration:
+            rows = conn.execute(
+                "SELECT integration, direction, status, error_msg, synced_at FROM context_sync WHERE integration=? ORDER BY synced_at DESC LIMIT ?",
+                (integration, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT integration, direction, status, error_msg, synced_at FROM context_sync ORDER BY synced_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+    finally:
+        conn.close()
+    return [
+        {"integration": r[0], "direction": r[1], "status": r[2],
+         "error_msg": r[3], "synced_at": r[4]}
+        for r in rows
+    ]
+
+
 def _self_test() -> int:
     # WARN: see SKETCHY_CODE_AUDIT.md#s5-3 — FIXED in F40 (stale env-var line removed from docstring).
     """Smoke test that exercises v1 + v2 schema against a temp DB.
@@ -1265,6 +1520,16 @@ def _usage() -> str:
         "  toolforge_db.py upsert_perf <skill_name> <latency_ms> <success:0|1> [<tokens>]\n"
         "  toolforge_db.py get_perf <skill_name>\n"
         "  toolforge_db.py perf_all\n"
+        "  toolforge_db.py pref_signal <task_type_id> <skill_name> <positive:0|1> [<weight>]\n"
+        "  toolforge_db.py get_prefs <task_type_id>\n"
+        "  toolforge_db.py all_prefs\n"
+        "  toolforge_db.py pref_score <task_type_id> <skill_name>\n"
+        "  toolforge_db.py save_shortcut <name> <description> <trigger_skills_json> <steps_json> [--manual]\n"
+        "  toolforge_db.py shortcut_trigger <name>\n"
+        "  toolforge_db.py list_shortcuts\n"
+        "  toolforge_db.py delete_shortcut <name>\n"
+        "  toolforge_db.py log_sync <integration> <push|pull> [<status>] [<hash>]\n"
+        "  toolforge_db.py sync_history [<integration>] [<limit>]\n"
         "  toolforge_db.py --self-test\n"
     )
 
@@ -1427,6 +1692,53 @@ def main(argv: list[str]) -> int:
             return 0
         if cmd == "perf_all":
             print(json.dumps(get_skill_performance_all()))
+            return 0
+        if cmd == "pref_signal":
+            positive = argv[4] in {"1", "true", "True"}
+            weight = float(argv[5]) if len(argv) > 5 else 1.0
+            record_preference_signal(argv[2], argv[3], positive, weight)
+            print("ok")
+            return 0
+        if cmd == "get_prefs":
+            print(json.dumps(get_preferences_for_task(argv[2])))
+            return 0
+        if cmd == "all_prefs":
+            print(json.dumps(get_all_preferences()))
+            return 0
+        if cmd == "pref_score":
+            print(get_preference_score(argv[2], argv[3]))
+            return 0
+        if cmd == "save_shortcut":
+            manual = "--manual" in argv
+            args = [a for a in argv[2:] if a != "--manual"]
+            save_workflow_shortcut(
+                args[0], args[1],
+                json.loads(args[2]), json.loads(args[3]),
+                auto_detected=not manual,
+            )
+            print("ok")
+            return 0
+        if cmd == "shortcut_trigger":
+            record_shortcut_trigger(argv[2])
+            print("ok")
+            return 0
+        if cmd == "list_shortcuts":
+            print(json.dumps(list_workflow_shortcuts()))
+            return 0
+        if cmd == "delete_shortcut":
+            ok = delete_workflow_shortcut(argv[2])
+            print("ok" if ok else "not found")
+            return 0
+        if cmd == "log_sync":
+            status_arg = argv[4] if len(argv) > 4 else "ok"
+            hash_arg = argv[5] if len(argv) > 5 else None
+            log_context_sync(argv[2], argv[3], hash_arg, status_arg)
+            print("ok")
+            return 0
+        if cmd == "sync_history":
+            integration = argv[2] if len(argv) > 2 and not argv[2].isdigit() else None
+            limit = int(argv[3] if len(argv) > 3 else argv[2]) if len(argv) > 2 else 20
+            print(json.dumps(get_sync_history(integration, limit)))
             return 0
         if cmd == "--self-test":
             return _self_test()

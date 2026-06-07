@@ -19,7 +19,7 @@
 
 ## What ToolForge does
 
-Twelve systems, one install:
+Fourteen systems, one install:
 
 | Feature | What it does |
 |---|---|
@@ -35,6 +35,8 @@ Twelve systems, one install:
 | **Token monitoring** | Tracks estimated token usage per skill per session. Surfaces a token-efficiency leaderboard. Integrates with Anthropic SDK for exact counts. |
 | **Organisation support** | Teams share a skill library and custom stacks via a shared `org_id`. Org admins push stacks and overrides to all members. |
 | **Health monitor + admin** | Passively flags stale, dormant, archived, inactive, and low-rated tools. `/toolforge-admin` provides manual overrides, auto-retire, and score rebalancing. |
+| **Adaptive profile** | Learns which skills you prefer per task type across sessions. Preference-adjusted routing re-ranks results to match your personal workflow. Detects recurring skill sequences and saves them as one-click shortcuts. |
+| **Bridge API** | Local REST server (port 7842) exposes ToolForge state to external agents. Hermes can pull context. Obsidian can receive daily session notes. Any webhook-capable tool can integrate. |
 | **Security model** | URL allow-list (7 hosts), install command sandbox (`argv[0]` allow-list, `shell=False`), and a semantic malware scan before any web-discovered tool is allowed to run. |
 
 ---
@@ -113,6 +115,8 @@ Same model. Same prompt. Different tool surface.
 | `/toolforge-status` | Live dashboard: install count, top-rated tools, health warnings, router cache status. |
 | `/toolforge-rate <1-5>` | Rate the most recently installed tool. Feeds directly into future rankings. |
 | `/toolforge-rescan` | Force-refresh the local-scan cache and router index after installing or removing tools. |
+| `/toolforge-profile [sub]` | View and manage your adaptive preference profile. Record feedback, list detected shortcuts, or query top skills per task type. |
+| `/toolforge-bridge [sub]` | Manage the REST API bridge server. Check Hermes/Obsidian sync status, export context bundle, or start the bridge on port 7842. |
 
 ---
 
@@ -327,7 +331,7 @@ Results are cached at `tempdir/toolforge_local_scan_<category>.json` for 5 minut
 
 ## Storage
 
-All ToolForge data lives in `~/.claude/toolforge.db` (SQLite, schema v5):
+All ToolForge data lives in `~/.claude/toolforge.db` (SQLite, schema v6):
 
 | Table | Contents |
 |---|---|
@@ -341,6 +345,9 @@ All ToolForge data lives in `~/.claude/toolforge.db` (SQLite, schema v5):
 | `skill_stacks` | stack_name, display_name, skills_json, org_id, is_builtin |
 | `org_profiles` | org_id, org_name, admin_email, shared_catalog, config_json |
 | `skill_performance` | skill_name, avg_latency_ms, error_count, success_count, token_avg |
+| `user_preferences` | task_type_id, skill_name, preference_score, positive_signals, negative_signals |
+| `workflow_shortcuts` | shortcut_name, trigger_skills, steps_json, hit_count, auto_detected |
+| `context_sync` | integration, direction, payload_hash, status, synced_at |
 
 ```bash
 # Inspect
@@ -617,6 +624,91 @@ ToolForge Admin — available sub-commands:
 ```
 
 The self-management routines (`purge-stale`, `auto-retire`, `rebalance`) can be run on a schedule or triggered manually. They write to the same SQLite DB and take effect on the next routing cycle.
+
+---
+
+## Adaptive profile
+
+ToolForge v0.4 adds a learning loop that adapts to your workflow over time. After each session, the `session-end-learner` hook fires and records which skills you used and for what task type. Over multiple sessions a **preference profile** builds up that re-ranks routing suggestions in your favour.
+
+```
+======= User Preference Profile =======
+
+  Task: frontend-ui
+    shadcn-ui-mcp                    +1.35  |+++++++++++++|
+    21st-magic                       +0.90  |++++++++++|
+    playwright                       +0.60  |++++++|
+    firecrawl                        -0.10  |-|
+
+  Task: data-analysis
+    pandas-ai                        +1.60  |++++++++++++++++|
+    context7                         +0.80  |++++++++|
+```
+
+**Workflow shortcuts** are detected automatically: if the same ordered sequence of 3+ skills appears across 4+ distinct sessions, ToolForge saves it as a named shortcut you can trigger in one command.
+
+### Commands
+
+```bash
+/toolforge-profile              # view full profile
+/toolforge-profile shortcuts    # list detected shortcuts
+/toolforge-profile detect       # scan now for new shortcuts
+/toolforge-profile feedback frontend-ui shadcn-ui-mcp good
+```
+
+### Enabling integrations
+
+Add to `~/.claude/toolforge-config.json`:
+
+```json
+{
+  "learner_push_hermes":   true,
+  "learner_push_obsidian": true
+}
+```
+
+With these enabled, every session end also sends a summary to your Hermes memory agent and appends a timestamped note to your Obsidian vault.
+
+---
+
+## Bridge API
+
+The ToolForge bridge server exposes your profile, stacks, pipelines, and shortcuts over a local REST API so external agents can read and write ToolForge state without shell access.
+
+```bash
+python webui/bridge_server.py --port 7842
+```
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/health` | GET | Liveness + DB schema version |
+| `/api/profile` | GET | User preference profile (all task types) |
+| `/api/skills` | GET | Installed skills by 30-day usage |
+| `/api/stacks` | GET | All skill stacks |
+| `/api/pipelines` | GET | Recent 20 pipelines |
+| `/api/shortcuts` | GET | Workflow shortcuts |
+| `/api/export/context` | GET | Full bundle: profile + stacks + shortcuts + top predicted skills |
+| `/api/context/ingest` | POST | Receive external context (logged to `context_sync`) |
+| `/api/webhooks/hermes` | POST | Hermes pushes memories here |
+| `/api/webhooks/obsidian` | POST | Obsidian pushes note events here |
+
+**Hermes integration** — point Hermes at `POST /api/webhooks/hermes` and configure:
+
+```json
+{ "hermes_base_url": "http://localhost:8000", "hermes_api_key": "..." }
+```
+
+**Obsidian integration** — install the [Obsidian Local REST API](https://github.com/coddingtonbear/obsidian-local-rest-api) community plugin, then:
+
+```json
+{
+  "obsidian_base_url": "https://127.0.0.1:27123",
+  "obsidian_api_key": "your-plugin-key",
+  "obsidian_vault_folder": "ToolForge Sessions"
+}
+```
+
+ToolForge writes one daily note per vault folder containing timestamped session summaries. Enable via `"learner_push_obsidian": true`.
 
 ---
 
