@@ -36,7 +36,7 @@ def force_retire(tool_name: str, reason: str = "admin-retired") -> None:
     """Insert several low ratings to push a tool below the auto-retire threshold."""
     for _ in range(5):
         db.log_rating(tool_name, 1)
-    print(f"  Retired {tool_name!r}: 5 × 1-star ratings inserted. Reason: {reason}")
+    print(f"  Retired {tool_name!r}: 5x 1-star ratings inserted. Reason: {reason}")
 
 
 def override_rating(tool_name: str, rating: float) -> None:
@@ -45,7 +45,7 @@ def override_rating(tool_name: str, rating: float) -> None:
     rounded = round(target)
     for _ in range(3):
         db.log_rating(tool_name, rounded)
-    print(f"  Score override for {tool_name!r}: 3 × {rounded}-star ratings inserted → target ~{target:.1f}")
+    print(f"  Score override for {tool_name!r}: 3x {rounded}-star ratings inserted -> target ~{target:.1f}")
 
 
 def reset_ratings(tool_name: str) -> None:
