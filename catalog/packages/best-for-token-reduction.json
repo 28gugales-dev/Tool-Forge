@@ -1,0 +1,37 @@
+{
+  "package_id": "best-for-token-reduction",
+  "display_name": "Best for Token Reduction",
+  "tagline": "Cut your API spend without cutting capability",
+  "description": "Every tool here is selected because it produces more output per token or actively compresses context overhead. Ideal for teams on API budgets, long-running agentic sessions, or anyone hitting context limits.",
+  "badge": "token-reduction",
+  "tools": [
+    {
+      "name": "token-optimizer",
+      "type": "mcp",
+      "install_command": "claude mcp add token-optimizer -- npx -y @ooples/token-optimizer-mcp",
+      "why": "Brotli compression + SQLite caching cuts MCP tool-schema overhead from 15K-20K tokens to near-zero"
+    },
+    {
+      "name": "sequential-thinking",
+      "type": "mcp",
+      "install_command": "claude mcp add sequential-thinking -- npx -y @modelcontextprotocol/server-sequential-thinking",
+      "why": "Structured thinking prevents expensive exploratory back-and-forth that wastes tokens on wrong paths"
+    },
+    {
+      "name": "fetch",
+      "type": "mcp",
+      "install_command": "claude mcp add fetch -- npx -y @modelcontextprotocol/server-fetch",
+      "why": "Chunked incremental reads mean you only load the portion of a page you actually need"
+    },
+    {
+      "name": "sqlite",
+      "type": "mcp",
+      "install_command": "claude mcp add sqlite -- uvx mcp-server-sqlite",
+      "why": "Query only the rows you need instead of loading entire datasets into context"
+    }
+  ],
+  "estimated_token_overhead": "very-low",
+  "requires_api_keys": [],
+  "token_savings_note": "token-optimizer alone typically recovers 60-80% of MCP definition overhead per session",
+  "best_for": ["API-budget-conscious teams", "long agentic workflows", "Claude SDK users", "high-volume automation"]
+}

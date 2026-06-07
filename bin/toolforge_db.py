@@ -27,7 +27,7 @@ from typing import Optional
 DB_PATH = Path(os.path.expanduser("~/.claude/toolforge.db"))
 # Canonical decay half-life. Imported by toolforge_local_scan.py and webui/inventory.py.
 DECAY_HALFLIFE_DAYS = 75.0  # AI tooling moves fast — was 180d, cut to ~2.5mo
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 BAYES_PRIOR_MEAN = 3.0
 BAYES_PRIOR_WEIGHT = 5.0
 
@@ -153,6 +153,70 @@ def init_db() -> None:
                     ON pipelines(steps_hash);
                 CREATE INDEX IF NOT EXISTS idx_pipelines_run_at
                     ON pipelines(run_at DESC);
+                """
+            )
+        if current < 5:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS token_stats (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id      TEXT NOT NULL,
+                    skill_name      TEXT,
+                    prompt_tokens   INTEGER NOT NULL DEFAULT 0,
+                    output_tokens   INTEGER NOT NULL DEFAULT 0,
+                    total_tokens    INTEGER NOT NULL DEFAULT 0,
+                    recorded_at     TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_token_stats_skill
+                    ON token_stats(skill_name);
+                CREATE INDEX IF NOT EXISTS idx_token_stats_session
+                    ON token_stats(session_id);
+
+                CREATE TABLE IF NOT EXISTS predictions (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id      TEXT NOT NULL,
+                    predicted_skill TEXT NOT NULL,
+                    confidence      REAL NOT NULL DEFAULT 0.0,
+                    was_used        INTEGER NOT NULL DEFAULT 0,
+                    predicted_at    TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_predictions_session
+                    ON predictions(session_id);
+                CREATE INDEX IF NOT EXISTS idx_predictions_skill
+                    ON predictions(predicted_skill);
+
+                CREATE TABLE IF NOT EXISTS skill_stacks (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    stack_name      TEXT NOT NULL UNIQUE,
+                    display_name    TEXT NOT NULL,
+                    description     TEXT,
+                    skills_json     TEXT NOT NULL DEFAULT '[]',
+                    org_id          TEXT,
+                    is_builtin      INTEGER NOT NULL DEFAULT 0,
+                    created_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                    updated_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_stacks_org ON skill_stacks(org_id);
+
+                CREATE TABLE IF NOT EXISTS org_profiles (
+                    org_id          TEXT PRIMARY KEY,
+                    org_name        TEXT NOT NULL,
+                    admin_email     TEXT,
+                    shared_catalog  INTEGER NOT NULL DEFAULT 1,
+                    config_json     TEXT NOT NULL DEFAULT '{}',
+                    created_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                    updated_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+
+                CREATE TABLE IF NOT EXISTS skill_performance (
+                    skill_name      TEXT PRIMARY KEY,
+                    avg_latency_ms  REAL NOT NULL DEFAULT 0.0,
+                    p95_latency_ms  REAL NOT NULL DEFAULT 0.0,
+                    error_count     INTEGER NOT NULL DEFAULT 0,
+                    success_count   INTEGER NOT NULL DEFAULT 0,
+                    token_avg       REAL NOT NULL DEFAULT 0.0,
+                    last_measured   TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
                 """
             )
         if current < SCHEMA_VERSION:
@@ -653,6 +717,372 @@ def status() -> tuple[str, bool]:
     return "\n".join(lines), had_error
 
 
+# ---------- section: token-stats-v5 ----------
+
+
+def log_token_stats(session_id: str, skill_name: Optional[str],
+                    prompt_tokens: int, output_tokens: int) -> None:
+    init_db()
+    conn = _connect()
+    try:
+        conn.execute(
+            """INSERT INTO token_stats
+               (session_id, skill_name, prompt_tokens, output_tokens, total_tokens)
+               VALUES (?, ?, ?, ?, ?)""",
+            (session_id, skill_name, prompt_tokens, output_tokens, prompt_tokens + output_tokens),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_token_stats_bulk(skill_names: list[str]) -> dict:
+    init_db()
+    if not skill_names:
+        return {}
+    placeholders = ",".join("?" * len(skill_names))
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            f"""SELECT skill_name,
+                       COUNT(*) AS sessions,
+                       AVG(total_tokens) AS avg_tokens,
+                       MIN(total_tokens) AS min_tokens,
+                       MAX(total_tokens) AS max_tokens
+                FROM token_stats
+                WHERE skill_name IN ({placeholders})
+                GROUP BY skill_name""",
+            skill_names,
+        ).fetchall()
+    finally:
+        conn.close()
+    return {
+        row[0]: {"sessions": row[1], "avg_tokens": row[2],
+                 "min_tokens": row[3], "max_tokens": row[4]}
+        for row in rows
+    }
+
+
+def get_token_efficiency_rank() -> list[dict]:
+    """Returns skills sorted by lowest avg_tokens (most token-efficient first)."""
+    init_db()
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            """SELECT skill_name, COUNT(*) AS sessions, AVG(total_tokens) AS avg_tokens
+               FROM token_stats
+               WHERE skill_name IS NOT NULL
+               GROUP BY skill_name
+               HAVING COUNT(*) >= 3
+               ORDER BY avg_tokens ASC
+               LIMIT 20"""
+        ).fetchall()
+    finally:
+        conn.close()
+    return [{"skill_name": r[0], "sessions": r[1], "avg_tokens": round(r[2], 1)} for r in rows]
+
+
+# ---------- section: predictions-v5 ----------
+
+
+def log_prediction(session_id: str, predicted_skill: str, confidence: float) -> None:
+    init_db()
+    conn = _connect()
+    try:
+        conn.execute(
+            "INSERT INTO predictions (session_id, predicted_skill, confidence) VALUES (?, ?, ?)",
+            (session_id, predicted_skill, max(0.0, min(1.0, confidence))),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def confirm_prediction(session_id: str, predicted_skill: str) -> None:
+    init_db()
+    conn = _connect()
+    try:
+        conn.execute(
+            "UPDATE predictions SET was_used=1 WHERE session_id=? AND predicted_skill=?",
+            (session_id, predicted_skill),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_prediction_accuracy() -> dict:
+    """Overall hit-rate: predictions that were confirmed used / all predictions."""
+    init_db()
+    conn = _connect()
+    try:
+        row = conn.execute(
+            """SELECT COUNT(*) AS total,
+                      SUM(was_used) AS hits,
+                      AVG(confidence) AS avg_confidence
+               FROM predictions"""
+        ).fetchone()
+    finally:
+        conn.close()
+    total, hits, avg_conf = row
+    total = total or 0
+    hits = hits or 0
+    return {
+        "total": total,
+        "hits": hits,
+        "accuracy": round(hits / total, 3) if total else None,
+        "avg_confidence": round(avg_conf, 3) if avg_conf else None,
+    }
+
+
+def get_top_predicted_skills(limit: int = 10) -> list[dict]:
+    init_db()
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            """SELECT predicted_skill,
+                      COUNT(*) AS predictions,
+                      SUM(was_used) AS hits,
+                      AVG(confidence) AS avg_conf
+               FROM predictions
+               GROUP BY predicted_skill
+               ORDER BY hits DESC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [
+        {"skill": r[0], "predictions": r[1], "hits": r[2],
+         "hit_rate": round(r[2] / r[1], 3) if r[1] else 0.0,
+         "avg_confidence": round(r[3], 3) if r[3] else 0.0}
+        for r in rows
+    ]
+
+
+# ---------- section: skill-stacks-v5 ----------
+
+
+def save_skill_stack(stack_name: str, display_name: str, description: str,
+                     skills: list[str], org_id: Optional[str] = None,
+                     is_builtin: bool = False) -> None:
+    if not stack_name or not re.match(r"^[a-z0-9._-]{1,60}$", stack_name):
+        raise ValueError(f"invalid stack_name {stack_name!r}")
+    skills_json = json.dumps(skills)
+    init_db()
+    conn = _connect()
+    try:
+        conn.execute(
+            """INSERT INTO skill_stacks
+               (stack_name, display_name, description, skills_json, org_id, is_builtin, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+               ON CONFLICT(stack_name) DO UPDATE SET
+                 display_name=excluded.display_name,
+                 description=excluded.description,
+                 skills_json=excluded.skills_json,
+                 org_id=excluded.org_id,
+                 updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')""",
+            (stack_name, display_name, description, skills_json, org_id, 1 if is_builtin else 0),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_skill_stack(stack_name: str) -> Optional[dict]:
+    init_db()
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT stack_name, display_name, description, skills_json, org_id, is_builtin, created_at, updated_at FROM skill_stacks WHERE stack_name=?",
+            (stack_name,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return None
+    return {
+        "stack_name": row[0], "display_name": row[1], "description": row[2],
+        "skills": json.loads(row[3]), "org_id": row[4],
+        "is_builtin": bool(row[5]), "created_at": row[6], "updated_at": row[7],
+    }
+
+
+def list_skill_stacks(org_id: Optional[str] = None) -> list[dict]:
+    init_db()
+    conn = _connect()
+    try:
+        if org_id:
+            rows = conn.execute(
+                "SELECT stack_name, display_name, description, skills_json, org_id, is_builtin FROM skill_stacks WHERE org_id=? OR is_builtin=1 ORDER BY is_builtin DESC, stack_name",
+                (org_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT stack_name, display_name, description, skills_json, org_id, is_builtin FROM skill_stacks ORDER BY is_builtin DESC, stack_name"
+            ).fetchall()
+    finally:
+        conn.close()
+    return [
+        {"stack_name": r[0], "display_name": r[1], "description": r[2],
+         "skills": json.loads(r[3]), "org_id": r[4], "is_builtin": bool(r[5])}
+        for r in rows
+    ]
+
+
+def delete_skill_stack(stack_name: str) -> bool:
+    init_db()
+    conn = _connect()
+    try:
+        cur = conn.execute("DELETE FROM skill_stacks WHERE stack_name=? AND is_builtin=0", (stack_name,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+# ---------- section: org-profiles-v5 ----------
+
+
+def save_org_profile(org_id: str, org_name: str, admin_email: Optional[str] = None,
+                     shared_catalog: bool = True, config: Optional[dict] = None) -> None:
+    if not org_id or not re.match(r"^[a-z0-9._-]{1,60}$", org_id):
+        raise ValueError(f"invalid org_id {org_id!r}")
+    config_json = json.dumps(config or {})
+    init_db()
+    conn = _connect()
+    try:
+        conn.execute(
+            """INSERT INTO org_profiles
+               (org_id, org_name, admin_email, shared_catalog, config_json, updated_at)
+               VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+               ON CONFLICT(org_id) DO UPDATE SET
+                 org_name=excluded.org_name,
+                 admin_email=excluded.admin_email,
+                 shared_catalog=excluded.shared_catalog,
+                 config_json=excluded.config_json,
+                 updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')""",
+            (org_id, org_name, admin_email, 1 if shared_catalog else 0, config_json),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_org_profile(org_id: str) -> Optional[dict]:
+    init_db()
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT org_id, org_name, admin_email, shared_catalog, config_json, created_at, updated_at FROM org_profiles WHERE org_id=?",
+            (org_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return None
+    return {
+        "org_id": row[0], "org_name": row[1], "admin_email": row[2],
+        "shared_catalog": bool(row[3]), "config": json.loads(row[4]),
+        "created_at": row[5], "updated_at": row[6],
+    }
+
+
+def list_org_profiles() -> list[dict]:
+    init_db()
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT org_id, org_name, admin_email, shared_catalog FROM org_profiles ORDER BY org_name"
+        ).fetchall()
+    finally:
+        conn.close()
+    return [{"org_id": r[0], "org_name": r[1], "admin_email": r[2], "shared_catalog": bool(r[3])} for r in rows]
+
+
+# ---------- section: skill-performance-v5 ----------
+
+
+def upsert_skill_performance(skill_name: str, latency_ms: float,
+                              success: bool, token_count: int = 0) -> None:
+    name = _validate_tool_name(skill_name)
+    init_db()
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT avg_latency_ms, error_count, success_count, token_avg FROM skill_performance WHERE skill_name=?",
+            (name,),
+        ).fetchone()
+        if row:
+            prev_avg, err_cnt, ok_cnt, prev_tok_avg = row
+            total = err_cnt + ok_cnt + 1
+            new_ok = ok_cnt + (1 if success else 0)
+            new_err = err_cnt + (0 if success else 1)
+            # Exponential moving average (α=0.2)
+            new_avg_lat = prev_avg * 0.8 + latency_ms * 0.2
+            new_tok_avg = prev_tok_avg * 0.8 + token_count * 0.2 if token_count > 0 else prev_tok_avg
+            conn.execute(
+                """UPDATE skill_performance SET
+                   avg_latency_ms=?, error_count=?, success_count=?, token_avg=?,
+                   last_measured=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                   WHERE skill_name=?""",
+                (new_avg_lat, new_err, new_ok, new_tok_avg, name),
+            )
+        else:
+            conn.execute(
+                """INSERT INTO skill_performance
+                   (skill_name, avg_latency_ms, error_count, success_count, token_avg)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (name, latency_ms, 0 if success else 1, 1 if success else 0, float(token_count)),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_skill_performance(skill_name: str) -> Optional[dict]:
+    init_db()
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT skill_name, avg_latency_ms, p95_latency_ms, error_count, success_count, token_avg, last_measured FROM skill_performance WHERE skill_name=?",
+            (_normalize(skill_name),),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return None
+    total = row[3] + row[4]
+    return {
+        "skill_name": row[0], "avg_latency_ms": row[1], "p95_latency_ms": row[2],
+        "error_count": row[3], "success_count": row[4],
+        "error_rate": round(row[3] / total, 3) if total else 0.0,
+        "token_avg": row[5], "last_measured": row[6],
+    }
+
+
+def get_skill_performance_all() -> list[dict]:
+    init_db()
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            """SELECT skill_name, avg_latency_ms, error_count, success_count, token_avg
+               FROM skill_performance ORDER BY success_count DESC"""
+        ).fetchall()
+    finally:
+        conn.close()
+    result = []
+    for r in rows:
+        total = r[2] + r[3]
+        result.append({
+            "skill_name": r[0], "avg_latency_ms": round(r[1], 1),
+            "error_count": r[2], "success_count": r[3],
+            "error_rate": round(r[2] / total, 3) if total else 0.0,
+            "token_avg": round(r[4], 1),
+        })
+    return result
+
+
 def _self_test() -> int:
     # WARN: see SKETCHY_CODE_AUDIT.md#s5-3 — FIXED in F40 (stale env-var line removed from docstring).
     """Smoke test that exercises v1 + v2 schema against a temp DB.
@@ -818,6 +1248,23 @@ def _usage() -> str:
         "  toolforge_db.py get_pipelines_by_hash <steps_hash> [<limit>]\n"
         "  toolforge_db.py get_recent_pipelines [<limit>]\n"
         "  toolforge_db.py schema_version\n"
+        "  toolforge_db.py log_token_stats <session_id> <skill_name|-> <prompt_tok> <output_tok>\n"
+        "  toolforge_db.py get_token_stats_bulk <s1> ...\n"
+        "  toolforge_db.py token_efficiency_rank\n"
+        "  toolforge_db.py log_prediction <session_id> <skill> <confidence>\n"
+        "  toolforge_db.py confirm_prediction <session_id> <skill>\n"
+        "  toolforge_db.py prediction_accuracy\n"
+        "  toolforge_db.py top_predicted_skills [<limit>]\n"
+        "  toolforge_db.py save_stack <stack_name> <display_name> <description> <skills_json> [<org_id>] [--builtin]\n"
+        "  toolforge_db.py get_stack <stack_name>\n"
+        "  toolforge_db.py list_stacks [<org_id>]\n"
+        "  toolforge_db.py delete_stack <stack_name>\n"
+        "  toolforge_db.py save_org <org_id> <org_name> [<admin_email>]\n"
+        "  toolforge_db.py get_org <org_id>\n"
+        "  toolforge_db.py list_orgs\n"
+        "  toolforge_db.py upsert_perf <skill_name> <latency_ms> <success:0|1> [<tokens>]\n"
+        "  toolforge_db.py get_perf <skill_name>\n"
+        "  toolforge_db.py perf_all\n"
         "  toolforge_db.py --self-test\n"
     )
 
@@ -914,6 +1361,72 @@ def main(argv: list[str]) -> int:
             finally:
                 conn.close()
             print(v)
+            return 0
+        if cmd == "log_token_stats":
+            skill = None if argv[3] == "-" else argv[3]
+            log_token_stats(argv[2], skill, int(argv[4]), int(argv[5]))
+            print("ok")
+            return 0
+        if cmd == "get_token_stats_bulk":
+            print(json.dumps(get_token_stats_bulk(list(argv[2:]))))
+            return 0
+        if cmd == "token_efficiency_rank":
+            print(json.dumps(get_token_efficiency_rank()))
+            return 0
+        if cmd == "log_prediction":
+            log_prediction(argv[2], argv[3], float(argv[4]))
+            print("ok")
+            return 0
+        if cmd == "confirm_prediction":
+            confirm_prediction(argv[2], argv[3])
+            print("ok")
+            return 0
+        if cmd == "prediction_accuracy":
+            print(json.dumps(get_prediction_accuracy()))
+            return 0
+        if cmd == "top_predicted_skills":
+            limit = int(argv[2]) if len(argv) > 2 else 10
+            print(json.dumps(get_top_predicted_skills(limit)))
+            return 0
+        if cmd == "save_stack":
+            org = argv[6] if len(argv) > 6 and argv[6] != "--builtin" else None
+            builtin = "--builtin" in argv
+            skills = json.loads(argv[5])
+            save_skill_stack(argv[2], argv[3], argv[4], skills, org, builtin)
+            print("ok")
+            return 0
+        if cmd == "get_stack":
+            print(json.dumps(get_skill_stack(argv[2])))
+            return 0
+        if cmd == "list_stacks":
+            org = argv[2] if len(argv) > 2 else None
+            print(json.dumps(list_skill_stacks(org)))
+            return 0
+        if cmd == "delete_stack":
+            ok = delete_skill_stack(argv[2])
+            print("ok" if ok else "not found (or builtin)")
+            return 0
+        if cmd == "save_org":
+            email = argv[4] if len(argv) > 4 else None
+            save_org_profile(argv[2], argv[3], email)
+            print("ok")
+            return 0
+        if cmd == "get_org":
+            print(json.dumps(get_org_profile(argv[2])))
+            return 0
+        if cmd == "list_orgs":
+            print(json.dumps(list_org_profiles()))
+            return 0
+        if cmd == "upsert_perf":
+            tokens = int(argv[5]) if len(argv) > 5 else 0
+            upsert_skill_performance(argv[2], float(argv[3]), argv[4] in {"1", "true", "True"}, tokens)
+            print("ok")
+            return 0
+        if cmd == "get_perf":
+            print(json.dumps(get_skill_performance(argv[2])))
+            return 0
+        if cmd == "perf_all":
+            print(json.dumps(get_skill_performance_all()))
             return 0
         if cmd == "--self-test":
             return _self_test()

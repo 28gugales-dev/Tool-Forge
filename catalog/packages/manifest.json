@@ -1,0 +1,12 @@
+{
+  "version": "1.0.0",
+  "generated": "2026-06-07",
+  "packages": [
+    { "id": "best-for-business",       "file": "best-for-business.json",       "tool_count": 6 },
+    { "id": "best-for-personal",       "file": "best-for-personal.json",       "tool_count": 5 },
+    { "id": "best-for-coding",         "file": "best-for-coding.json",         "tool_count": 6 },
+    { "id": "best-for-token-reduction","file": "best-for-token-reduction.json","tool_count": 4 },
+    { "id": "best-for-design",         "file": "best-for-design.json",         "tool_count": 5 },
+    { "id": "best-for-testing",        "file": "best-for-testing.json",        "tool_count": 5 }
+  ]
+}

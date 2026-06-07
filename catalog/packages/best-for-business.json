@@ -1,0 +1,48 @@
+{
+  "package_id": "best-for-business",
+  "display_name": "Best for Business",
+  "tagline": "Production-grade stack for teams shipping SaaS, APIs, and internal tools",
+  "description": "Hand-curated for engineering teams that need reliability, audit trails, and integration with real business infrastructure. Every tool here is maintained by a first-party org or has 500+ stars and active commits.",
+  "badge": "business",
+  "tools": [
+    {
+      "name": "sequential-thinking",
+      "type": "mcp",
+      "install_command": "claude mcp add sequential-thinking -- npx -y @modelcontextprotocol/server-sequential-thinking",
+      "why": "Structured planning before any code prevents expensive rework in team settings"
+    },
+    {
+      "name": "github",
+      "type": "mcp",
+      "install_command": "claude mcp add github -- npx @github/github-mcp-server",
+      "why": "PR reviews, issue triage, and CI status directly from Claude — no context switching"
+    },
+    {
+      "name": "postgres",
+      "type": "mcp",
+      "install_command": "claude mcp add postgres -- npx -y @modelcontextprotocol/server-postgres",
+      "why": "Inspect production schemas, run read-only analytics queries, and design migrations inline"
+    },
+    {
+      "name": "context7",
+      "type": "mcp",
+      "install_command": "claude mcp add context7 -- npx -y @upstash/context7-mcp@latest",
+      "why": "Accurate framework docs reduce hallucinated APIs that sneak into PRs"
+    },
+    {
+      "name": "token-optimizer",
+      "type": "mcp",
+      "install_command": "claude mcp add token-optimizer -- npx -y @ooples/token-optimizer-mcp",
+      "why": "Cuts per-session token costs 60-80% — essential when billing per API token across a team"
+    },
+    {
+      "name": "memory",
+      "type": "mcp",
+      "install_command": "claude mcp add memory -- npx -y @modelcontextprotocol/server-memory",
+      "why": "Shared project knowledge graph keeps every team member's Claude session in sync"
+    }
+  ],
+  "estimated_token_overhead": "low",
+  "requires_api_keys": ["GITHUB_TOKEN", "DATABASE_URL"],
+  "best_for": ["SaaS teams", "platform engineering", "product engineers", "CTOs/tech leads"]
+}

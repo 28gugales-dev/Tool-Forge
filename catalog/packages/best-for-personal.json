@@ -1,0 +1,42 @@
+{
+  "package_id": "best-for-personal",
+  "display_name": "Best for Personal Use",
+  "tagline": "The everyday stack for solo builders, side projects, and self-improvement",
+  "description": "No API keys required (except optional Brave Search). Optimized for a single developer working across personal projects, research, and quick tasks. Light on tokens, high on utility.",
+  "badge": "personal",
+  "tools": [
+    {
+      "name": "memory",
+      "type": "mcp",
+      "install_command": "claude mcp add memory -- npx -y @modelcontextprotocol/server-memory",
+      "why": "Claude remembers your projects, preferences, and context across every session"
+    },
+    {
+      "name": "filesystem",
+      "type": "mcp",
+      "install_command": "claude mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem",
+      "why": "Read, write, and organize local files without copy-pasting into the chat"
+    },
+    {
+      "name": "fetch",
+      "type": "mcp",
+      "install_command": "claude mcp add fetch -- npx -y @modelcontextprotocol/server-fetch",
+      "why": "Read any webpage as clean markdown — research, recipes, documentation, anything"
+    },
+    {
+      "name": "brave-search",
+      "type": "mcp",
+      "install_command": "claude mcp add brave-search -- npx -y @modelcontextprotocol/server-brave-search",
+      "why": "Real-time web search so Claude isn't limited to its training cutoff (free tier available)"
+    },
+    {
+      "name": "time",
+      "type": "mcp",
+      "install_command": "claude mcp add time -- npx -y @modelcontextprotocol/server-time",
+      "why": "Always accurate dates and timezone conversions for scheduling, journaling, and planning"
+    }
+  ],
+  "estimated_token_overhead": "very-low",
+  "requires_api_keys": ["BRAVE_API_KEY (optional)"],
+  "best_for": ["solo developers", "students", "researchers", "writers", "side project builders"]
+}

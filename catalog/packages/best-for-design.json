@@ -1,0 +1,42 @@
+{
+  "package_id": "best-for-design",
+  "display_name": "Best for Design / Frontend",
+  "tagline": "Go from idea to polished React UI in one session",
+  "description": "The definitive frontend design stack. Combines AI component generation, curated component libraries, and live framework docs so Claude produces production-quality interfaces without hallucinated component APIs.",
+  "badge": "design",
+  "tools": [
+    {
+      "name": "21st-magic",
+      "type": "mcp",
+      "install_command": "claude mcp add 21st-magic -- npx -y @21st-dev/magic-mcp",
+      "why": "Natural language → modern React/Tailwind component with live preview and TypeScript"
+    },
+    {
+      "name": "shadcn-ui-mcp",
+      "type": "mcp",
+      "install_command": "claude mcp add shadcn -- npx -y shadcn-ui-mcp-server",
+      "why": "Live shadcn/ui registry: Claude always uses real component props, not invented ones"
+    },
+    {
+      "name": "magic-ui",
+      "type": "mcp",
+      "install_command": "claude mcp add magic-ui -- npx -y @magicuidesign/mcp",
+      "why": "Animated React components (buttons, backgrounds, sparkles) ready to drop in"
+    },
+    {
+      "name": "context7",
+      "type": "mcp",
+      "install_command": "claude mcp add context7 -- npx -y @upstash/context7-mcp@latest",
+      "why": "Accurate Tailwind, Radix, Framer Motion docs so generated code compiles first time"
+    },
+    {
+      "name": "playwright",
+      "type": "mcp",
+      "install_command": "claude mcp add playwright -- npx @playwright/mcp@latest",
+      "why": "Visual regression testing and screenshot capture to verify component output"
+    }
+  ],
+  "estimated_token_overhead": "medium",
+  "requires_api_keys": ["TWENTY_FIRST_API_KEY (for 21st-magic)"],
+  "best_for": ["frontend engineers", "UI/UX developers", "design system builders", "indie hackers building products"]
+}

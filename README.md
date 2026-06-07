@@ -19,17 +19,22 @@
 
 ## What ToolForge does
 
-Eight systems, one install:
+Twelve systems, one install:
 
 | Feature | What it does |
 |---|---|
 | **Live discovery** | Searches the live web for the best skill, plugin, or MCP for any task. URL-gated to 7 trusted hosts, malware-scanned before anything runs. |
 | **Cold-start catalog** | Ships 20 hand-curated, quality-gated MCP servers pre-seeded into the ranker. Brand-new users start with signal, not a blank slate. |
+| **Suggested skills** | 25 task-type maps (frontend, auth, testing, AI/LLM, …) inject 2–3 known-good tools before live search runs. Always a great starting point. |
+| **Curated packages** | Six named bundles (`best-for-business`, `best-for-coding`, `best-for-design`, `best-for-token-reduction`, `best-for-personal`, `best-for-testing`). Install a whole stack with one command. |
 | **Auto-router** | Fires on every prompt before Claude sees it. Scores all installed skills with TF-IDF cosine similarity in under 80ms. Injects the right skill when a strong match exists. |
+| **Predictive layer** | Fires once per session. Analyses pipeline history, usage frequency, and the current prompt to predict which skills you will need — before you ask. |
 | **Pipeline orchestrator** | `/forge` decomposes any multi-phase task into an ordered skill chain, renders an ASCII plan, waits for approval, then executes step by step with context flowing between steps. Saves every chain for instant reuse. |
 | **Task hunter** | `/toolforge-hunt` finds the single best tool for a specific task, installs it, and immediately starts working — no second prompt. |
 | **Learning loop** | Rates every tool after each session. Bayesian-shrunk Likert scores with a 75-day exponential half-life re-rank all future discovery, routing, and pipeline results automatically. |
-| **Health monitor** | Passively flags stale, dormant, archived, inactive, and low-rated tools. Surfaces replacements before they slow you down. |
+| **Token monitoring** | Tracks estimated token usage per skill per session. Surfaces a token-efficiency leaderboard. Integrates with Anthropic SDK for exact counts. |
+| **Organisation support** | Teams share a skill library and custom stacks via a shared `org_id`. Org admins push stacks and overrides to all members. |
+| **Health monitor + admin** | Passively flags stale, dormant, archived, inactive, and low-rated tools. `/toolforge-admin` provides manual overrides, auto-retire, and score rebalancing. |
 | **Security model** | URL allow-list (7 hosts), install command sandbox (`argv[0]` allow-list, `shell=False`), and a semantic malware scan before any web-discovered tool is allowed to run. |
 
 ---
@@ -78,9 +83,15 @@ Anthropic's built-in tool search works with what you already have installed. Too
 | | Anthropic Tool Search | ToolForge |
 |---|---|---|
 | Finds new tools | No — discovery is manual | Yes — live web search, gated to 7 trusted hosts |
+| Curated bundles by use case | No | Yes — 6 packages (`/toolforge-packages`) |
+| Known-good skill suggestions | No | Yes — 25 task-type maps with 2–3 suggestions each |
 | Learns your preferences | No | Yes — Likert ratings re-rank every future result |
+| Predicts what you'll need | No | Yes — history + pipeline patterns → pre-session forecast |
 | Routes prompts to the right skill | No | Yes — TF-IDF cosine similarity on every message |
 | Chains skills into pipelines | No | Yes — `/forge` orchestrates multi-phase tasks |
+| Organisation / team sharing | No | Yes — shared stacks and catalogs via `org_id` |
+| Token efficiency tracking | No | Yes — per-skill token leaderboard, SDK integration |
+| Admin controls | No | Yes — retire, override, rebalance, auto-retire |
 | Works offline | Yes | Yes — 5-entry fallback cache per category |
 | External dependencies | — | None — pure Python stdlib |
 | Data leaves your machine | — | Never |
@@ -94,12 +105,14 @@ Same model. Same prompt. Different tool surface.
 | Command | What it does |
 |---|---|
 | `/toolforge <category>` | Discover and install the top 5 tools for a category. Valid: `UI`, `backend`, `database`, `testing`, `devops`. |
+| `/toolforge-packages [id]` | Browse and install curated tool bundles by use case. See [Curated Packages](#curated-packages) below. |
+| `/toolforge-hunt <task>` | Find the single best skill or MCP server for a specific task, install it, then immediately start working. |
+| `/forge <multi-phase task>` | Decompose a complex task into a pipeline of skills, show the plan, get approval, then execute each step in sequence. |
+| `/toolforge-predict` | Run the predictive engine: surfaces which skills you are likely to need this session based on history and pipeline patterns. |
+| `/toolforge-admin [sub]` | Admin panel: retire skills, override ratings, manage org profiles, create stacks, run self-management routines. |
 | `/toolforge-status` | Live dashboard: install count, top-rated tools, health warnings, router cache status. |
 | `/toolforge-rate <1-5>` | Rate the most recently installed tool. Feeds directly into future rankings. |
 | `/toolforge-rescan` | Force-refresh the local-scan cache and router index after installing or removing tools. |
-| `/toolforge-hunt <task>` | Find the single best skill or MCP server for a specific task, install it, then immediately start working. |
-| `/toolforge-status` | Shows health warnings for stale, archived, or low-rated tools and suggests replacements. |
-| `/forge <multi-phase task>` | Decompose a complex task into a pipeline of skills, show the plan, get approval, then execute each step in sequence. |
 
 ---
 
@@ -314,15 +327,20 @@ Results are cached at `tempdir/toolforge_local_scan_<category>.json` for 5 minut
 
 ## Storage
 
-All ToolForge data lives in `~/.claude/toolforge.db` (SQLite, schema v3):
+All ToolForge data lives in `~/.claude/toolforge.db` (SQLite, schema v5):
 
 | Table | Contents |
 |---|---|
 | `installs` | tool_name, category, approved, installed_at |
 | `ratings` | tool_name, rating (1–5), rated_at |
-| `usage_stats` | tool_name, session_id, call_count, session_date |
-| `routing_scores` | prompt_hash, skill_name, score, routed_at |
+| `usage_stats` | tool_key, count_30d, last_used_at |
+| `routing_scores` | tool_key, desc_match, name_match, usage_boost, likert_norm, composite |
 | `pipelines` | task_desc, steps_hash, steps_json, success, run_at |
+| `token_stats` | session_id, skill_name, prompt_tokens, output_tokens, total_tokens |
+| `predictions` | session_id, predicted_skill, confidence, was_used |
+| `skill_stacks` | stack_name, display_name, skills_json, org_id, is_builtin |
+| `org_profiles` | org_id, org_name, admin_email, shared_catalog, config_json |
+| `skill_performance` | skill_name, avg_latency_ms, error_count, success_count, token_avg |
 
 ```bash
 # Inspect
@@ -345,7 +363,260 @@ The `pipelines` table lets forge recognize when it has run a skill chain before 
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to add a category or extend the curator |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 | [SKETCHY\_CODE\_AUDIT.md](SKETCHY_CODE_AUDIT.md) | Known issues, doc/code drift, future-risk spots |
+| [catalog/suggestions.json](catalog/suggestions.json) | 25 task-type → skill suggestion maps |
+| [catalog/packages/](catalog/packages/) | 6 curated bundle JSONs with install commands |
 | [demo/demo\_script.md](demo/demo_script.md) | Live demo walkthrough with speaker notes |
+
+---
+
+## Curated Packages
+
+Run `/toolforge-packages` to browse and install bundles. Each package is a hand-curated set of 4–6 tools with a shared purpose. Install the whole bundle in one command.
+
+<details>
+<summary><strong>Best for Business</strong> — production SaaS stack for engineering teams</summary>
+
+| Tool | Type | Why |
+|---|---|---|
+| `sequential-thinking` | MCP | Structured planning prevents expensive rework in team settings |
+| `github` | MCP | PR reviews, issue triage, and CI status without context switching |
+| `postgres` | MCP | Inspect schemas, run analytics, and design migrations inline |
+| `context7` | MCP | Accurate framework docs reduce hallucinated APIs that slip into PRs |
+| `token-optimizer` | MCP | Cuts per-session token costs 60–80% — critical when billing per token across a team |
+| `memory` | MCP | Shared knowledge graph keeps every team member's Claude in sync |
+
+```bash
+/toolforge-packages best-for-business
+```
+API keys required: `GITHUB_TOKEN`, `DATABASE_URL`
+</details>
+
+<details>
+<summary><strong>Best for Personal Use</strong> — the everyday solo-builder stack</summary>
+
+| Tool | Type | Why |
+|---|---|---|
+| `memory` | MCP | Claude remembers your projects and context across every session |
+| `filesystem` | MCP | Read/write local files without copy-pasting into the chat |
+| `fetch` | MCP | Turn any webpage into clean markdown — research, recipes, docs |
+| `brave-search` | MCP | Real-time web search beyond Claude's training cutoff (free tier) |
+| `time` | MCP | Always-accurate dates and timezone conversions |
+
+```bash
+/toolforge-packages best-for-personal
+```
+API keys required: `BRAVE_API_KEY` (optional)
+</details>
+
+<details>
+<summary><strong>Best for Coding</strong> — the core developer toolkit</summary>
+
+| Tool | Type | Why |
+|---|---|---|
+| `context7` | MCP | Version-pinned docs for React, Next.js, FastAPI, and 50+ more |
+| `sequential-thinking` | MCP | Decompose before coding — catches architecture mistakes early |
+| `git` | MCP | Git log, diff, and blame inline in Claude |
+| `filesystem` | MCP | Full read/write access to your project files |
+| `playwright` | MCP | E2E tests verified against a real browser |
+| `github` | MCP | Create PRs and review code without leaving Claude Code |
+
+```bash
+/toolforge-packages best-for-coding
+```
+API keys required: `GITHUB_TOKEN`
+</details>
+
+<details>
+<summary><strong>Best for Token Reduction</strong> — cut API spend without cutting capability</summary>
+
+| Tool | Type | Why |
+|---|---|---|
+| `token-optimizer` | MCP | Cuts MCP tool-schema overhead from 15K–20K tokens to near-zero |
+| `sequential-thinking` | MCP | Structured reasoning avoids exploratory back-and-forth that wastes tokens |
+| `fetch` | MCP | Chunked incremental reads — only load what you actually need |
+| `sqlite` | MCP | Query only the rows you need instead of loading datasets into context |
+
+```bash
+/toolforge-packages best-for-token-reduction
+```
+API keys required: none. `token-optimizer` alone typically saves 60–80% of MCP overhead per session.
+</details>
+
+<details>
+<summary><strong>Best for Design / Frontend</strong> — from idea to polished React UI in one session</summary>
+
+| Tool | Type | Why |
+|---|---|---|
+| `21st-magic` | MCP | Natural language → modern React/Tailwind component with live preview |
+| `shadcn-ui-mcp` | MCP | Live shadcn/ui registry — Claude always uses real component props |
+| `magic-ui` | MCP | Animated React components ready to drop into Tailwind projects |
+| `context7` | MCP | Accurate Tailwind, Radix, Framer Motion docs |
+| `playwright` | MCP | Visual regression and screenshot to verify component output |
+
+```bash
+/toolforge-packages best-for-design
+```
+API keys required: `TWENTY_FIRST_API_KEY` (for 21st-magic)
+</details>
+
+<details>
+<summary><strong>Best for Testing / QA</strong> — write fewer bugs, catch more regressions</summary>
+
+| Tool | Type | Why |
+|---|---|---|
+| `playwright` | MCP | Write and run E2E browser tests against a real browser |
+| `context7` | MCP | Accurate Vitest/Jest/pytest API docs — no hallucinated assertion methods |
+| `sequential-thinking` | MCP | Plan test cases and edge conditions before writing assertions |
+| `filesystem` | MCP | Read source and test files together for coverage analysis |
+| `github` | MCP | Post coverage reports and review test PRs with inline comments |
+
+```bash
+/toolforge-packages best-for-testing
+```
+API keys required: `GITHUB_TOKEN` (optional)
+</details>
+
+---
+
+## Suggested Skills
+
+When you run `/toolforge-hunt` or `/toolforge <category>`, ToolForge checks `catalog/suggestions.json` first. If your task matches a known type, the two or three best-known tools for that task are injected directly into the results — before live search runs.
+
+25 task types are pre-mapped. A few examples:
+
+| Task type | Suggested skills |
+|---|---|
+| Frontend UI / components | `21st-magic`, `shadcn-ui-mcp`, `magic-ui` |
+| Browser automation / E2E | `playwright`, `context7` |
+| Database / SQL | `postgres`, `sqlite`, `sequential-thinking` |
+| Token reduction | `token-optimizer`, `sequential-thinking` |
+| Academic research | `arxiv-mcp-server`, `exa`, `fetch` |
+| Authentication / security | `sequential-thinking`, `context7`, `github` |
+| React / Next.js | `context7`, `21st-magic`, `shadcn-ui-mcp` |
+| Data analysis | `jupyter-notebook-mcp`, `sqlite`, `sequential-thinking` |
+| AI / LLM integration | `context7`, `sequential-thinking`, `memory` |
+| Web scraping | `firecrawl`, `fetch`, `playwright` |
+
+Add your own mappings or override these in `catalog/suggestions.json`.
+
+---
+
+## Predictive layer
+
+ToolForge v0.3 adds a `UserPromptSubmit` hook (`hooks/session-start-predictor.py`) that fires **once at the start of every session**. It analyses your pipeline history, recent usage, and the current prompt to predict which skills you are most likely to need.
+
+```
+[ToolForge predictor] Skills likely needed this session:
+  1. playwright           ██████████ (87%)
+  2. context7             ████████   (72%)
+  3. sequential-thinking  █████      (51%)
+```
+
+**Shadow mode (default)**: predictions are logged to `~/.claude/toolforge_predictor.log` but nothing is injected. After a few sessions you can review prediction accuracy with `/toolforge-predict` and promote to active mode:
+
+```json
+{ "predictor_mode": "active", "predictor_min_confidence": 0.4 }
+```
+
+**How the predictor works:**
+
+| Signal | Weight | Source |
+|---|---|---|
+| TF-IDF router score on current prompt | 40% | `toolforge_router.py` |
+| Skills that followed the same starting skill in past pipelines | 30% | `pipelines` table |
+| Recency-weighted session history | 20% | `pipelines` table, exp-decay |
+| 30-day usage frequency | 10% | `usage_stats` table |
+
+Predictions are logged to the `predictions` table and marked `was_used=1` if the skill is actually invoked, building an accuracy track record visible in `/toolforge-status`.
+
+---
+
+## Organisation support
+
+Teams can share a skill library and custom skill stacks by setting a shared `org_id`.
+
+**Set up an org:**
+```bash
+/toolforge-admin org create acme-corp "Acme Engineering" admin@acme.com
+/toolforge-admin org set acme-corp
+```
+
+All members who set the same `org_id` in `~/.claude/toolforge-config.json` share:
+- **Skill stacks** — named collections of tools (e.g. `acme-frontend`, `acme-data`)
+- **Built-in packages** — the six curated packages are available as stacks to the whole org
+- **Admin overrides** — org admins can force-retire or override ratings org-wide
+
+**Create a custom org stack:**
+```bash
+/toolforge-admin stack create acme-frontend "Acme Frontend Stack" \
+  "Standard UI tools for the Acme design system" \
+  '["21st-magic","shadcn-ui-mcp","context7","playwright"]' acme-corp
+```
+
+Members see org stacks in `/toolforge-packages` and `/toolforge-status`.
+
+---
+
+## Token monitoring
+
+ToolForge tracks estimated token usage per skill per session and surfaces a **token-efficiency leaderboard** in `/toolforge-status`:
+
+```
+======= Token Efficiency Leaderboard =======
+  Skill                          Sessions   Avg Tokens
+  --------------------------------------------------
+  fetch                               42        1,240
+  sequential-thinking                 38        2,100
+  playwright                          21        5,800
+  firecrawl                           12       18,400
+============================================
+```
+
+Skills with high token cost get a **token-load flag** in health monitoring. The ranker can optionally weight token efficiency into composite scores — enable in config:
+
+```json
+{ "score_token_weight": 0.10 }
+```
+
+When using the **Claude SDK or Anthropic API** directly, pass real token counts to the tracker for precise measurements:
+
+```python
+# After an API call
+subprocess.run([
+    sys.executable, "bin/toolforge_token_tracker.py", "record",
+    session_id, skill_name,
+    str(response.usage.input_tokens),
+    str(response.usage.output_tokens),
+])
+```
+
+Heuristic estimation (chars / 4) is used automatically when real counts are not available.
+
+---
+
+## Admin panel
+
+`/toolforge-admin` gives manual control over every ToolForge system:
+
+```
+ToolForge Admin — available sub-commands:
+
+  health                   Full system health dashboard
+  retire <tool>            Force-retire a tool (5×1-star ratings)
+  override <tool> <score>  Override a tool's effective rating (1.0–5.0)
+  reset <tool>             Wipe all ratings for a tool
+  stack create             Create a named skill stack
+  stack list               List all stacks
+  stack import             Import curated packages as built-in stacks
+  org create               Create an organisation profile
+  org list                 List organisations
+  org set <org_id>         Set your active organisation
+  purge-stale [days]       Flag unused skills (default 90 days)
+  auto-retire              Auto-retire skills with >50% error rate
+  rebalance                Rebuild all routing scores from current data
+```
+
+The self-management routines (`purge-stale`, `auto-retire`, `rebalance`) can be run on a schedule or triggered manually. They write to the same SQLite DB and take effect on the next routing cycle.
 
 ---
 

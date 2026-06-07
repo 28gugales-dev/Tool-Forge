@@ -1,0 +1,48 @@
+{
+  "package_id": "best-for-coding",
+  "display_name": "Best for Coding",
+  "tagline": "The core developer toolkit — accurate docs, version control, and structured reasoning",
+  "description": "Built for software engineers who want Claude to write correct code the first time. Every tool in this package directly reduces hallucinated APIs, missed edge cases, or wasted iterations.",
+  "badge": "coding",
+  "tools": [
+    {
+      "name": "context7",
+      "type": "mcp",
+      "install_command": "claude mcp add context7 -- npx -y @upstash/context7-mcp@latest",
+      "why": "Version-pinned docs for React, Next.js, Tailwind, FastAPI, and 50+ more — no more hallucinated APIs"
+    },
+    {
+      "name": "sequential-thinking",
+      "type": "mcp",
+      "install_command": "claude mcp add sequential-thinking -- npx -y @modelcontextprotocol/server-sequential-thinking",
+      "why": "Structured decomposition before writing code catches architecture mistakes early"
+    },
+    {
+      "name": "git",
+      "type": "mcp",
+      "install_command": "claude mcp add git -- uvx mcp-server-git",
+      "why": "Git log, diff, and blame inline — Claude understands your project history"
+    },
+    {
+      "name": "filesystem",
+      "type": "mcp",
+      "install_command": "claude mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem",
+      "why": "Full read/write access to your local project files without copy-pasting"
+    },
+    {
+      "name": "playwright",
+      "type": "mcp",
+      "install_command": "claude mcp add playwright -- npx @playwright/mcp@latest",
+      "why": "E2E tests written and verified against a real browser — no mock drift"
+    },
+    {
+      "name": "github",
+      "type": "mcp",
+      "install_command": "claude mcp add github -- npx @github/github-mcp-server",
+      "why": "Create PRs, review code, and manage issues without leaving Claude Code"
+    }
+  ],
+  "estimated_token_overhead": "medium",
+  "requires_api_keys": ["GITHUB_TOKEN"],
+  "best_for": ["full-stack developers", "backend engineers", "open source contributors", "tech leads"]
+}

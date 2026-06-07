@@ -1,0 +1,42 @@
+{
+  "package_id": "best-for-testing",
+  "display_name": "Best for Testing / QA",
+  "tagline": "Write fewer bugs, catch more regressions, ship with confidence",
+  "description": "Covers the full testing spectrum from unit tests to E2E browser flows. Every tool here makes Claude more accurate when writing tests — correct assertion APIs, real browser state, and structured test planning.",
+  "badge": "testing",
+  "tools": [
+    {
+      "name": "playwright",
+      "type": "mcp",
+      "install_command": "claude mcp add playwright -- npx @playwright/mcp@latest",
+      "why": "Write and execute E2E browser tests against a real browser with accessibility-tree control"
+    },
+    {
+      "name": "context7",
+      "type": "mcp",
+      "install_command": "claude mcp add context7 -- npx -y @upstash/context7-mcp@latest",
+      "why": "Accurate Vitest/Jest/pytest/Playwright API docs — no hallucinated assertion methods"
+    },
+    {
+      "name": "sequential-thinking",
+      "type": "mcp",
+      "install_command": "claude mcp add sequential-thinking -- npx -y @modelcontextprotocol/server-sequential-thinking",
+      "why": "Plan test cases, edge conditions, and negative paths before writing a single assertion"
+    },
+    {
+      "name": "filesystem",
+      "type": "mcp",
+      "install_command": "claude mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem",
+      "why": "Read source files alongside test files for complete coverage analysis"
+    },
+    {
+      "name": "github",
+      "type": "mcp",
+      "install_command": "claude mcp add github -- npx @github/github-mcp-server",
+      "why": "Post test coverage reports and review test PRs with inline comments"
+    }
+  ],
+  "estimated_token_overhead": "medium",
+  "requires_api_keys": ["GITHUB_TOKEN (optional)"],
+  "best_for": ["QA engineers", "TDD practitioners", "teams with CI requirements", "open source maintainers"]
+}

@@ -1,0 +1,250 @@
+{
+  "_meta": {
+    "version": "1.0.0",
+    "description": "Curated task-type to skill/MCP suggestions. 2-3 picks per task, hand-verified. Used by the curator and hunter to inject known-good candidates before live search.",
+    "last_updated": "2026-06-07"
+  },
+  "task_types": [
+    {
+      "id": "frontend-ui",
+      "label": "Frontend UI / Component Design",
+      "keywords": ["frontend", "UI", "component", "design", "react", "tailwind", "interface", "layout", "CSS", "HTML"],
+      "suggestions": [
+        { "name": "21st-magic", "type": "mcp", "reason": "AI-powered React/Tailwind component generation from natural language" },
+        { "name": "shadcn-ui-mcp", "type": "mcp", "reason": "Live shadcn/ui registry access eliminates hallucinated component APIs" },
+        { "name": "magic-ui", "type": "mcp", "reason": "Pre-built animated React components for modern UI" }
+      ]
+    },
+    {
+      "id": "browser-automation",
+      "label": "Browser Automation / E2E Testing",
+      "keywords": ["playwright", "browser", "selenium", "puppeteer", "E2E", "end to end", "click", "form", "screenshot", "web testing"],
+      "suggestions": [
+        { "name": "playwright", "type": "mcp", "reason": "Official Microsoft MCP; accessibility-tree automation without vision models" },
+        { "name": "context7", "type": "mcp", "reason": "Real-time Playwright docs prevent hallucinated API usage" }
+      ]
+    },
+    {
+      "id": "database-sql",
+      "label": "Database / SQL",
+      "keywords": ["database", "SQL", "postgres", "postgresql", "mysql", "sqlite", "query", "schema", "migration", "ORM"],
+      "suggestions": [
+        { "name": "postgres", "type": "mcp", "reason": "Official Anthropic MCP for read-only PostgreSQL with schema inspection" },
+        { "name": "sqlite", "type": "mcp", "reason": "Official Anthropic MCP for local SQLite databases" },
+        { "name": "sequential-thinking", "type": "mcp", "reason": "Structured reasoning for complex query design and migration planning" }
+      ]
+    },
+    {
+      "id": "api-backend",
+      "label": "API / Backend Development",
+      "keywords": ["API", "REST", "backend", "server", "endpoint", "FastAPI", "Express", "Node", "Python", "route", "middleware"],
+      "suggestions": [
+        { "name": "context7", "type": "mcp", "reason": "Version-accurate docs for FastAPI, Express, and 50+ frameworks" },
+        { "name": "sequential-thinking", "type": "mcp", "reason": "Decompose multi-endpoint API design into sequenced steps" },
+        { "name": "git", "type": "mcp", "reason": "Track schema changes and review diffs inline during development" }
+      ]
+    },
+    {
+      "id": "code-review-security",
+      "label": "Code Review / Security Audit",
+      "keywords": ["code review", "security", "audit", "vulnerability", "OWASP", "CVE", "static analysis", "quality", "refactor"],
+      "suggestions": [
+        { "name": "sequential-thinking", "type": "mcp", "reason": "Methodical step-by-step review catches issues that one-shot analysis misses" },
+        { "name": "github", "type": "mcp", "reason": "Inline PR comments and issue creation directly from the review session" },
+        { "name": "filesystem", "type": "mcp", "reason": "Read full file trees for cross-file dependency analysis" }
+      ]
+    },
+    {
+      "id": "git-version-control",
+      "label": "Git / Version Control",
+      "keywords": ["git", "commit", "branch", "merge", "PR", "pull request", "diff", "rebase", "conflict", "repository"],
+      "suggestions": [
+        { "name": "git", "type": "mcp", "reason": "Official Anthropic MCP for all Git operations from inside Claude" },
+        { "name": "github", "type": "mcp", "reason": "GitHub PR/issue management without leaving the editor" }
+      ]
+    },
+    {
+      "id": "web-research",
+      "label": "Web Research / Information Retrieval",
+      "keywords": ["research", "search", "web", "news", "current events", "browse", "internet", "find", "look up"],
+      "suggestions": [
+        { "name": "brave-search", "type": "mcp", "reason": "Real-time web/news search with generous free tier" },
+        { "name": "exa", "type": "mcp", "reason": "Semantic neural search finds conceptually similar pages, not just keyword matches" },
+        { "name": "fetch", "type": "mcp", "reason": "Read any webpage as clean markdown with incremental chunked access" }
+      ]
+    },
+    {
+      "id": "web-scraping",
+      "label": "Web Scraping / Content Extraction",
+      "keywords": ["scrape", "crawl", "extract", "parse HTML", "spider", "batch crawl", "JavaScript rendering"],
+      "suggestions": [
+        { "name": "firecrawl", "type": "mcp", "reason": "Production-grade scraping with JS rendering and LLM-optimized markdown output" },
+        { "name": "fetch", "type": "mcp", "reason": "Lightweight single-page fetch; no API key required" },
+        { "name": "playwright", "type": "mcp", "reason": "Full browser control for login-gated or JS-heavy pages" }
+      ]
+    },
+    {
+      "id": "data-analysis",
+      "label": "Data Analysis / Science",
+      "keywords": ["data", "analysis", "pandas", "numpy", "matplotlib", "statistics", "CSV", "jupyter", "notebook", "visualization", "chart"],
+      "suggestions": [
+        { "name": "jupyter-notebook-mcp", "type": "mcp", "reason": "Execute Python code in live Jupyter kernels with self-correcting error handling" },
+        { "name": "sqlite", "type": "mcp", "reason": "Fast ad-hoc SQL queries over tabular data" },
+        { "name": "sequential-thinking", "type": "mcp", "reason": "Plan multi-stage analyses before committing to code" }
+      ]
+    },
+    {
+      "id": "academic-research",
+      "label": "Academic / Literature Research",
+      "keywords": ["academic", "paper", "arXiv", "citation", "literature review", "journal", "preprint", "research", "survey"],
+      "suggestions": [
+        { "name": "arxiv-mcp-server", "type": "mcp", "reason": "Search arXiv papers by keyword, author, and category" },
+        { "name": "exa", "type": "mcp", "reason": "Semantic search surfaces related papers by meaning, not just title" },
+        { "name": "fetch", "type": "mcp", "reason": "Retrieve and parse PDF/HTML papers as clean text" }
+      ]
+    },
+    {
+      "id": "documentation-writing",
+      "label": "Documentation / Technical Writing",
+      "keywords": ["docs", "documentation", "README", "tutorial", "guide", "markdown", "write", "explain", "wiki"],
+      "suggestions": [
+        { "name": "context7", "type": "mcp", "reason": "Pull accurate API references to document what actually exists" },
+        { "name": "filesystem", "type": "mcp", "reason": "Read source files to generate accurate docstrings and READMEs" },
+        { "name": "fetch", "type": "mcp", "reason": "Reference external docs and standards inline while writing" }
+      ]
+    },
+    {
+      "id": "devops-ci",
+      "label": "DevOps / CI-CD / Infrastructure",
+      "keywords": ["DevOps", "CI", "CD", "pipeline", "Docker", "Kubernetes", "deploy", "GitHub Actions", "infrastructure", "IaC", "Terraform"],
+      "suggestions": [
+        { "name": "github", "type": "mcp", "reason": "Manage workflows, secrets, and deployment status from Claude" },
+        { "name": "filesystem", "type": "mcp", "reason": "Read and edit Dockerfiles, YAML configs, and IaC templates" },
+        { "name": "sequential-thinking", "type": "mcp", "reason": "Plan rollout sequences and rollback procedures step by step" }
+      ]
+    },
+    {
+      "id": "file-management",
+      "label": "File / Project Management",
+      "keywords": ["files", "directory", "organize", "rename", "move", "search files", "project structure", "local"],
+      "suggestions": [
+        { "name": "filesystem", "type": "mcp", "reason": "Official Anthropic MCP for full local filesystem access" },
+        { "name": "git", "type": "mcp", "reason": "Track file changes and history across the project" }
+      ]
+    },
+    {
+      "id": "memory-persistence",
+      "label": "Memory / Cross-Session Context",
+      "keywords": ["remember", "memory", "context", "persist", "sessions", "knowledge graph", "notes", "recall"],
+      "suggestions": [
+        { "name": "memory", "type": "mcp", "reason": "Official Anthropic persistent knowledge graph across all sessions" },
+        { "name": "filesystem", "type": "mcp", "reason": "Persist structured notes and context files locally" }
+      ]
+    },
+    {
+      "id": "time-scheduling",
+      "label": "Time / Scheduling / Deadlines",
+      "keywords": ["time", "date", "schedule", "deadline", "calendar", "timezone", "reminder", "duration"],
+      "suggestions": [
+        { "name": "time", "type": "mcp", "reason": "Official Anthropic MCP for accurate current time and timezone conversion" }
+      ]
+    },
+    {
+      "id": "complex-reasoning",
+      "label": "Complex Problem Solving / Planning",
+      "keywords": ["plan", "architect", "design", "complex", "reason", "decompose", "strategy", "multi-step", "problem solving"],
+      "suggestions": [
+        { "name": "sequential-thinking", "type": "mcp", "reason": "Structured step-by-step reasoning with dynamic revision and branching" },
+        { "name": "memory", "type": "mcp", "reason": "Track evolving plan state and entities across a long session" }
+      ]
+    },
+    {
+      "id": "token-optimization",
+      "label": "Token Reduction / Cost Optimization",
+      "keywords": ["token", "cost", "reduce", "optimize", "compress", "efficiency", "context window", "budget"],
+      "suggestions": [
+        { "name": "token-optimizer", "type": "mcp", "reason": "Brotli compression + caching cuts MCP overhead from 15K to near-zero tokens" },
+        { "name": "sequential-thinking", "type": "mcp", "reason": "Structured reasoning avoids exploratory rabbit holes that waste tokens" }
+      ]
+    },
+    {
+      "id": "react-nextjs",
+      "label": "React / Next.js Development",
+      "keywords": ["React", "Next.js", "NextJS", "SSR", "SSG", "app router", "pages router", "hooks", "state management"],
+      "suggestions": [
+        { "name": "context7", "type": "mcp", "reason": "Version-pinned React and Next.js docs eliminate hallucinated hook APIs" },
+        { "name": "21st-magic", "type": "mcp", "reason": "Generate React components from natural language descriptions" },
+        { "name": "shadcn-ui-mcp", "type": "mcp", "reason": "Live shadcn/ui component registry for Next.js apps" }
+      ]
+    },
+    {
+      "id": "typescript",
+      "label": "TypeScript / Type Safety",
+      "keywords": ["TypeScript", "types", "interface", "generics", "type safety", "type checking", "tsc", "type errors"],
+      "suggestions": [
+        { "name": "context7", "type": "mcp", "reason": "Accurate TypeScript standard library and framework type docs" },
+        { "name": "sequential-thinking", "type": "mcp", "reason": "Work through complex generic type designs methodically" }
+      ]
+    },
+    {
+      "id": "payments-billing",
+      "label": "Payments / Billing / SaaS",
+      "keywords": ["payment", "Stripe", "billing", "subscription", "invoice", "checkout", "SaaS", "monetize", "webhook"],
+      "suggestions": [
+        { "name": "context7", "type": "mcp", "reason": "Accurate Stripe SDK docs for webhooks and subscription lifecycle" },
+        { "name": "sequential-thinking", "type": "mcp", "reason": "Model the full payment flow before writing any code" },
+        { "name": "postgres", "type": "mcp", "reason": "Inspect billing schemas and run revenue queries inline" }
+      ]
+    },
+    {
+      "id": "auth-security",
+      "label": "Authentication / Authorization",
+      "keywords": ["auth", "authentication", "authorization", "JWT", "OAuth", "session", "login", "permissions", "RBAC", "security"],
+      "suggestions": [
+        { "name": "sequential-thinking", "type": "mcp", "reason": "Model auth flows and threat vectors step-by-step before implementing" },
+        { "name": "context7", "type": "mcp", "reason": "Accurate auth library docs (NextAuth, Lucia, Passport, etc.)" },
+        { "name": "github", "type": "mcp", "reason": "Review auth-related PRs with inline comment capability" }
+      ]
+    },
+    {
+      "id": "animation-motion",
+      "label": "Animation / Motion Design",
+      "keywords": ["animation", "GSAP", "Framer Motion", "motion", "transition", "scroll trigger", "CSS animation", "lottie", "keyframes"],
+      "suggestions": [
+        { "name": "21st-magic", "type": "mcp", "reason": "Generates motion-rich React components with Framer Motion out of the box" },
+        { "name": "magic-ui", "type": "mcp", "reason": "Pre-built animated components ready to drop into Tailwind projects" },
+        { "name": "context7", "type": "mcp", "reason": "Up-to-date Framer Motion and GSAP API docs" }
+      ]
+    },
+    {
+      "id": "testing-unit",
+      "label": "Unit / Integration Testing",
+      "keywords": ["unit test", "integration test", "Jest", "Vitest", "pytest", "mock", "coverage", "TDD", "test suite"],
+      "suggestions": [
+        { "name": "context7", "type": "mcp", "reason": "Accurate Vitest/Jest/pytest API docs for current test runner version" },
+        { "name": "filesystem", "type": "mcp", "reason": "Read source and test files together for complete coverage analysis" },
+        { "name": "sequential-thinking", "type": "mcp", "reason": "Plan test cases and edge conditions before writing them" }
+      ]
+    },
+    {
+      "id": "ai-llm",
+      "label": "AI / LLM Integration",
+      "keywords": ["AI", "LLM", "Claude", "OpenAI", "GPT", "embeddings", "RAG", "prompt", "agents", "Anthropic SDK", "tool use"],
+      "suggestions": [
+        { "name": "context7", "type": "mcp", "reason": "Current Anthropic and OpenAI SDK docs with working code examples" },
+        { "name": "sequential-thinking", "type": "mcp", "reason": "Design agentic flows and prompt chains step-by-step" },
+        { "name": "memory", "type": "mcp", "reason": "Persist conversation context and entity state across agent sessions" }
+      ]
+    },
+    {
+      "id": "mobile-dev",
+      "label": "Mobile / React Native Development",
+      "keywords": ["mobile", "React Native", "iOS", "Android", "Expo", "native", "app", "push notification", "deep link"],
+      "suggestions": [
+        { "name": "context7", "type": "mcp", "reason": "Version-accurate React Native and Expo docs" },
+        { "name": "shadcn-ui-mcp", "type": "mcp", "reason": "shadcn/ui has a React Native component track" },
+        { "name": "sequential-thinking", "type": "mcp", "reason": "Plan platform-specific divergences before writing shared code" }
+      ]
+    }
+  ]
+}
