@@ -35,7 +35,7 @@ Fourteen systems, one install:
 | **Task hunter** | `/toolforge-hunt` finds the single best tool for a specific task, installs it, and immediately starts working — no second prompt. |
 | **Learning loop** | Rates every tool after each session. Bayesian-shrunk Likert scores with a 75-day exponential half-life re-rank all future discovery, routing, and pipeline results automatically. |
 | **Token monitoring** | Tracks estimated token usage per skill per session. Surfaces a token-efficiency leaderboard. Integrates with Anthropic SDK for exact counts. |
-| **Organisation support** | Teams share a skill library and custom stacks via a shared `org_id`. Org admins push stacks and overrides to all members. |
+| **Organization support** | Teams share a skill library and custom stacks via a shared `org_id`. Org admins push stacks and overrides to all members. |
 | **Health monitor + admin** | Passively flags stale, dormant, archived, inactive, and low-rated tools. `/toolforge-admin` provides manual overrides, auto-retire, and score rebalancing. |
 | **Adaptive profile** | Learns which skills you prefer per task type across sessions. Preference-adjusted routing re-ranks results to match your personal workflow. Detects recurring skill sequences and saves them as one-click shortcuts. |
 | **Bridge API** | Local REST server (port 7842) exposes ToolForge state to external agents. Hermes can pull context. Obsidian can receive daily session notes. Any webhook-capable tool can integrate. |
@@ -127,7 +127,7 @@ Anthropic's built-in tool search works with what you already have installed. Too
 | Predicts what you'll need | No | Yes — history + pipeline patterns → pre-session forecast |
 | Routes prompts to the right skill | No | Yes — TF-IDF cosine similarity on every message |
 | Chains skills into pipelines | No | Yes — `/forge` orchestrates multi-phase tasks |
-| Organisation / team sharing | No | Yes — shared stacks and catalogs via `org_id` |
+| Organization / team sharing | No | Yes — shared stacks and catalogs via `org_id` |
 | Token efficiency tracking | No | Yes — per-skill token leaderboard, SDK integration |
 | Admin controls | No | Yes — retire, override, rebalance, auto-retire |
 | Works offline | Yes | Yes — 5-entry fallback cache per category |
@@ -575,7 +575,7 @@ Predictions are logged to the `predictions` table and marked `was_used=1` if the
 
 ---
 
-## Organisation support
+## Organization support
 
 Teams can share a skill library and custom skill stacks by setting a shared `org_id`.
 
@@ -652,9 +652,9 @@ ToolForge Admin — available sub-commands:
   stack create             Create a named skill stack
   stack list               List all stacks
   stack import             Import curated packages as built-in stacks
-  org create               Create an organisation profile
-  org list                 List organisations
-  org set <org_id>         Set your active organisation
+  org create               Create an organization profile
+  org list                 List organizations
+  org set <org_id>         Set your active organization
   purge-stale [days]       Flag unused skills (default 90 days)
   auto-retire              Auto-retire skills with >50% error rate
   rebalance                Rebuild all routing scores from current data
