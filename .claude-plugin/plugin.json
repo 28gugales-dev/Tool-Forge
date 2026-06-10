@@ -1,6 +1,6 @@
 {
   "name": "toolforge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Live discovery, smart installation, and Likert-rated learning for Claude Code plugins, MCP servers, and skills.",
   "author": {
     "name": "ToolForge",

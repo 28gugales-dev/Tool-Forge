@@ -9,7 +9,7 @@
       "name": "toolforge",
       "source": "./",
       "description": "Live discovery, smart installation, and Likert-rated learning for Claude Code tools.",
-      "version": "0.1.0"
+      "version": "0.2.0"
     }
   ]
 }
