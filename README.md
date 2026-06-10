@@ -2,12 +2,14 @@
 
 # ToolForge
 
-**The missing tool layer for Claude Code.**
+**The missing tool layer for Claude.**
 
 *Finds what you don't have. Learns what works. Routes every prompt. Chains what you need.*
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Claude%20Code-blueviolet)](https://claude.ai/code)
+[![Claude Code](https://img.shields.io/badge/Claude%20Code-full%20plugin-blueviolet)](https://claude.ai/code)
+[![Claude Desktop](https://img.shields.io/badge/Claude%20Desktop-MCP%20catalog-purple)](https://claude.ai/download)
+[![Claude Web](https://img.shields.io/badge/Claude%20Web-project%20prompt-blue)](https://claude.ai)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org)
 [![No external deps](https://img.shields.io/badge/deps-stdlib%20only-green)](pyproject.toml)
 
@@ -43,12 +45,66 @@ Fourteen systems, one install:
 
 ## Install
 
+### Platform compatibility
+
+| Feature | Claude Code | Claude Desktop | Claude Web |
+|---|---|---|---|
+| Full plugin (router, pipelines, learning loop) | Yes | No | No |
+| MCP catalog + curated packages | Yes | Yes | Yes (via prompt) |
+| Auto-router (fires on every prompt) | Yes | No | No |
+| Pipeline orchestrator `/forge` | Yes | No | No |
+| Learning loop + Likert ratings | Yes | No | No |
+| Predictive layer | Yes | No | No |
+| Hermes / Obsidian bridge | Yes | Yes | Yes |
+| Live tool discovery | Yes | No | No |
+
+---
+
+### Claude Code — full feature set
+
+All fourteen ToolForge systems — auto-router, pipeline orchestrator, learning loop, predictive layer, and more — run as a Claude Code plugin.
+
 ```bash
 claude plugin marketplace add ./toolforge
 claude plugin install toolforge@local-toolforge
 ```
 
 Done. ToolForge auto-registers slash commands, skills, and hooks. No pip install. No config required.
+
+---
+
+### Claude Desktop — MCP catalog
+
+Claude Desktop does not support the plugin hook system, so routing, pipelines, and the learning loop are unavailable. You can still install any of ToolForge's 20 curated MCP servers using the Desktop config format.
+
+**Generate a ready-to-paste config fragment:**
+
+```bash
+# One or more tools by name
+python bin/toolforge_gen_desktop_config.py sequential-thinking memory context7
+
+# A full curated package
+python bin/toolforge_gen_desktop_config.py --package best-for-coding
+
+# See all available tools
+python bin/toolforge_gen_desktop_config.py --list
+```
+
+Merge the output into your Claude Desktop config file, then restart Claude Desktop:
+
+| OS | Config file path |
+|---|---|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` |
+
+---
+
+### Claude Web — catalog via Project prompt
+
+Hooks and slash commands are not available on claude.ai. Add ToolForge's catalog knowledge, routing logic, and package recommendations to a Claude Web Project by pasting [`claude-web/project-prompt.md`](claude-web/project-prompt.md) as your Project's custom instructions.
+
+You get: catalog recommendations for all 20 tools, package suggestions, task-to-tool routing, and Desktop / Code install snippets — without any installation required.
 
 ---
 
@@ -372,6 +428,7 @@ The `pipelines` table lets forge recognize when it has run a skill chain before 
 | [SKETCHY\_CODE\_AUDIT.md](SKETCHY_CODE_AUDIT.md) | Known issues, doc/code drift, future-risk spots |
 | [catalog/suggestions.json](catalog/suggestions.json) | 25 task-type → skill suggestion maps |
 | [catalog/packages/](catalog/packages/) | 6 curated bundle JSONs with install commands |
+| [claude-web/project-prompt.md](claude-web/project-prompt.md) | System prompt for Claude Web Projects — paste into Project custom instructions |
 | [demo/demo\_script.md](demo/demo_script.md) | Live demo walkthrough with speaker notes |
 
 ---

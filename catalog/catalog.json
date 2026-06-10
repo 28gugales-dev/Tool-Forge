@@ -4,6 +4,10 @@
     "display_name": "Sequential Thinking",
     "description": "Official Anthropic MCP server for structured step-by-step reasoning with dynamic revision and branching for complex problem decomposition.",
     "install_command": "claude mcp add sequential-thinking -- npx -y @modelcontextprotocol/server-sequential-thinking",
+    "desktop_config": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+    },
     "source_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
     "stars_approx": 1500,
     "type": "mcp",
@@ -22,6 +26,10 @@
     "display_name": "Memory (Knowledge Graph)",
     "description": "Official Anthropic MCP server providing persistent memory via a local knowledge graph, enabling Claude to remember entities, relations, and project context across sessions.",
     "install_command": "claude mcp add memory -- npx -y @modelcontextprotocol/server-memory",
+    "desktop_config": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"]
+    },
     "source_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory",
     "stars_approx": 1200,
     "type": "mcp",
@@ -40,6 +48,10 @@
     "display_name": "Fetch",
     "description": "Official Anthropic MCP server for fetching web content and converting HTML to clean markdown, with support for incremental chunked reads.",
     "install_command": "claude mcp add fetch -- npx -y @modelcontextprotocol/server-fetch",
+    "desktop_config": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-fetch"]
+    },
     "source_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch",
     "stars_approx": 1000,
     "type": "mcp",
@@ -58,6 +70,10 @@
     "display_name": "Filesystem",
     "description": "Official Anthropic MCP server for reading, writing, and organizing files across your local system with support for recursive directory operations.",
     "install_command": "claude mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem",
+    "desktop_config": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/directory"]
+    },
     "source_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
     "stars_approx": 1000,
     "type": "mcp",
@@ -68,6 +84,8 @@
     "official": true,
     "official_org": "Anthropic",
     "requires_api_key": false,
+    "requires_config": true,
+    "config_note": "Replace /path/to/allowed/directory with the absolute path(s) you want Claude to access. Multiple paths can be added as additional args.",
     "cold_start_rating": 4.0,
     "cold_start_weight": 7
   },
@@ -76,6 +94,10 @@
     "display_name": "Time",
     "description": "Official Anthropic MCP server providing current date/time and timezone conversion utilities so Claude always has accurate temporal context.",
     "install_command": "claude mcp add time -- npx -y @modelcontextprotocol/server-time",
+    "desktop_config": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-time"]
+    },
     "source_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/time",
     "stars_approx": 500,
     "type": "mcp",
@@ -94,6 +116,11 @@
     "display_name": "Brave Search",
     "description": "Official Anthropic MCP server integrating Brave Search API for real-time web, news, image, and local search with a generous free tier.",
     "install_command": "claude mcp add brave-search -- npx -y @modelcontextprotocol/server-brave-search",
+    "desktop_config": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": {"BRAVE_API_KEY": "<your-brave-api-key>"}
+    },
     "source_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search",
     "stars_approx": 1000,
     "type": "mcp",
@@ -114,6 +141,10 @@
     "display_name": "Git",
     "description": "Official Anthropic MCP server for Git operations — clone, log, diff, status, commit history, and branch management directly from Claude.",
     "install_command": "claude mcp add git -- uvx mcp-server-git",
+    "desktop_config": {
+      "command": "uvx",
+      "args": ["mcp-server-git"]
+    },
     "source_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/git",
     "stars_approx": 1000,
     "type": "mcp",
@@ -132,6 +163,11 @@
     "display_name": "PostgreSQL",
     "description": "Official Anthropic MCP server for read-only PostgreSQL database access with schema inspection and natural-language query execution.",
     "install_command": "claude mcp add postgres -- npx -y @modelcontextprotocol/server-postgres",
+    "desktop_config": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres"],
+      "env": {"DATABASE_URL": "<postgres://user:pass@host:5432/dbname>"}
+    },
     "source_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/postgres",
     "stars_approx": 1000,
     "type": "mcp",
@@ -152,6 +188,10 @@
     "display_name": "SQLite",
     "description": "Official Anthropic MCP server for SQLite database interaction — read, write, query, and inspect local SQLite databases.",
     "install_command": "claude mcp add sqlite -- uvx mcp-server-sqlite",
+    "desktop_config": {
+      "command": "uvx",
+      "args": ["mcp-server-sqlite", "--db-path", "/path/to/your/database.sqlite"]
+    },
     "source_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/sqlite",
     "stars_approx": 1000,
     "type": "mcp",
@@ -162,6 +202,8 @@
     "official": true,
     "official_org": "Anthropic",
     "requires_api_key": false,
+    "requires_config": true,
+    "config_note": "Replace /path/to/your/database.sqlite with the absolute path to your SQLite file.",
     "cold_start_rating": 4.0,
     "cold_start_weight": 6
   },
@@ -170,6 +212,10 @@
     "display_name": "Playwright MCP (Microsoft)",
     "description": "Official Microsoft MCP server for browser automation using accessibility trees — navigate, click, type, screenshot, and test web apps without vision models.",
     "install_command": "claude mcp add playwright -- npx @playwright/mcp@latest",
+    "desktop_config": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest"]
+    },
     "source_url": "https://github.com/microsoft/playwright-mcp",
     "stars_approx": 8000,
     "type": "mcp",
@@ -188,6 +234,11 @@
     "display_name": "GitHub MCP (Official)",
     "description": "Official GitHub MCP server for managing repositories, pull requests, issues, code search, and workflow automation directly from Claude.",
     "install_command": "claude mcp add github -- npx @github/github-mcp-server",
+    "desktop_config": {
+      "command": "npx",
+      "args": ["@github/github-mcp-server"],
+      "env": {"GITHUB_TOKEN": "<your-github-personal-access-token>"}
+    },
     "source_url": "https://github.com/github/github-mcp-server",
     "stars_approx": 900,
     "type": "mcp",
@@ -208,6 +259,10 @@
     "display_name": "Context7",
     "description": "Fetches real-time, version-specific documentation for 50+ frameworks and libraries directly into Claude's context, eliminating hallucinated API usage.",
     "install_command": "claude mcp add context7 -- npx -y @upstash/context7-mcp@latest",
+    "desktop_config": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp@latest"]
+    },
     "source_url": "https://github.com/upstash/context7",
     "stars_approx": 5000,
     "type": "mcp",
@@ -225,6 +280,11 @@
     "display_name": "Firecrawl",
     "description": "Production-grade web scraping MCP that returns clean markdown and structured JSON optimized for LLMs, with JavaScript rendering and batch crawling.",
     "install_command": "claude mcp add firecrawl -- npx -y firecrawl-mcp",
+    "desktop_config": {
+      "command": "npx",
+      "args": ["-y", "firecrawl-mcp"],
+      "env": {"FIRECRAWL_API_KEY": "<your-firecrawl-api-key>"}
+    },
     "source_url": "https://github.com/firecrawl/firecrawl-mcp-server",
     "stars_approx": 5000,
     "type": "mcp",
@@ -244,6 +304,11 @@
     "display_name": "Exa Search",
     "description": "Semantic web search MCP using neural embeddings designed for LLM reasoning — finds pages by meaning rather than keyword matching.",
     "install_command": "claude mcp add exa -- npx -y exa-mcp-server",
+    "desktop_config": {
+      "command": "npx",
+      "args": ["-y", "exa-mcp-server"],
+      "env": {"EXA_API_KEY": "<your-exa-api-key>"}
+    },
     "source_url": "https://github.com/exa-labs/exa-mcp-server",
     "stars_approx": 1000,
     "type": "mcp",
@@ -263,6 +328,10 @@
     "display_name": "arXiv MCP Server",
     "description": "MCP server for searching and accessing arXiv academic papers with keyword search, author filtering, and category browsing.",
     "install_command": "claude mcp add arxiv -- uvx arxiv-mcp-server",
+    "desktop_config": {
+      "command": "uvx",
+      "args": ["arxiv-mcp-server"]
+    },
     "source_url": "https://github.com/blazickjp/arxiv-mcp-server",
     "stars_approx": 300,
     "type": "mcp",
@@ -280,6 +349,10 @@
     "display_name": "Jupyter Notebook MCP",
     "description": "MCP server enabling Claude to execute code in Jupyter notebooks with full IPython kernel access, self-correcting error handling, and cell management.",
     "install_command": "claude mcp add jupyter -- pip install jupyter-notebook-mcp",
+    "desktop_config": {
+      "command": "jupyter-notebook-mcp",
+      "args": []
+    },
     "source_url": "https://github.com/jjsantos01/jupyter-notebook-mcp",
     "stars_approx": 500,
     "type": "mcp",
@@ -290,7 +363,7 @@
     "official": false,
     "requires_api_key": false,
     "requires_config": true,
-    "config_note": "Requires a running Jupyter server. Start with: jupyter notebook --no-browser",
+    "config_note": "Run 'pip install jupyter-notebook-mcp' first, then start a Jupyter server with: jupyter notebook --no-browser",
     "cold_start_rating": 4.0,
     "cold_start_weight": 6
   },
@@ -299,6 +372,10 @@
     "display_name": "Magic UI MCP",
     "description": "Official Magic UI MCP server providing access to pre-built animated React components — buttons, backgrounds, text effects, and device mockups.",
     "install_command": "claude mcp add magic-ui -- npx -y @magicuidesign/mcp",
+    "desktop_config": {
+      "command": "npx",
+      "args": ["-y", "@magicuidesign/mcp"]
+    },
     "source_url": "https://github.com/magicuidesign/mcp",
     "stars_approx": 400,
     "type": "mcp",
@@ -317,6 +394,11 @@
     "display_name": "21st.dev Magic MCP",
     "description": "AI-powered UI component generator creating modern React components from natural language descriptions with live preview and TypeScript support.",
     "install_command": "claude mcp add 21st-magic -- npx -y @21st-dev/magic-mcp",
+    "desktop_config": {
+      "command": "npx",
+      "args": ["-y", "@21st-dev/magic-mcp"],
+      "env": {"TWENTY_FIRST_API_KEY": "<your-21st-dev-api-key>"}
+    },
     "source_url": "https://github.com/21st-dev/magic-mcp",
     "stars_approx": 600,
     "type": "mcp",
@@ -337,6 +419,10 @@
     "display_name": "shadcn/ui MCP",
     "description": "MCP server providing live access to the shadcn/ui component registry for React, Vue, Svelte, and React Native — eliminating hallucinated component APIs.",
     "install_command": "claude mcp add shadcn -- npx -y shadcn-ui-mcp-server",
+    "desktop_config": {
+      "command": "npx",
+      "args": ["-y", "shadcn-ui-mcp-server"]
+    },
     "source_url": "https://github.com/Jpisnice/shadcn-ui-mcp-server",
     "stars_approx": 400,
     "type": "mcp",
@@ -354,6 +440,10 @@
     "display_name": "Token Optimizer MCP",
     "description": "Reduces MCP context overhead from 15K–20K tokens to near-zero using Brotli compression, SQLite caching, and intelligent tool-schema trimming.",
     "install_command": "claude mcp add token-optimizer -- npx -y @ooples/token-optimizer-mcp",
+    "desktop_config": {
+      "command": "npx",
+      "args": ["-y", "@ooples/token-optimizer-mcp"]
+    },
     "source_url": "https://github.com/ooples/token-optimizer-mcp",
     "stars_approx": 380,
     "type": "mcp",
