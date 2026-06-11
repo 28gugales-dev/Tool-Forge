@@ -60,6 +60,37 @@ _tmpdir = tempfile.mkdtemp(prefix="toolforge_test_v03_")
 _tmp_db = Path(_tmpdir) / "toolforge.db"
 _tmp_cfg = Path(_tmpdir) / "toolforge-config.json"
 
+# ── snapshot real DB BEFORE tests run ──────────────────────────────────────────
+# The real DB may legitimately pre-exist from a real ToolForge install. A bare
+# existence check can't tell a test leak from a pre-existing file, so capture
+# existence + mtime + size up front. Leak detection then becomes: "tests must not
+# CREATE or MODIFY the real DB" — pre-existing-unchanged passes, new/changed fails.
+_REAL_DB = Path(os.path.expanduser("~/.claude/toolforge.db"))
+
+
+def _db_fingerprint(p: Path):
+    if not p.exists():
+        return None
+    st = p.stat()
+    return (st.st_mtime_ns, st.st_size)
+
+
+_REAL_DB_EXISTED = _REAL_DB.exists()
+_REAL_DB_FINGERPRINT = _db_fingerprint(_REAL_DB)
+
+
+def _real_db_touched() -> tuple[bool, str]:
+    """Return (touched, reason). touched=True only if the real DB was newly
+    created or its mtime/size changed since the pre-test snapshot."""
+    now_exists = _REAL_DB.exists()
+    if not _REAL_DB_EXISTED and now_exists:
+        return True, "real DB was created by tests"
+    if _REAL_DB_EXISTED and not now_exists:
+        return True, "real DB was deleted by tests"
+    if now_exists and _db_fingerprint(_REAL_DB) != _REAL_DB_FINGERPRINT:
+        return True, "real DB mtime/size changed during tests"
+    return False, ""
+
 # Patch DB_PATH before importing any module that uses it.
 import toolforge_db as _db_mod
 _db_mod.DB_PATH = _tmp_db  # redirect all DB operations to temp file
@@ -770,9 +801,11 @@ except Exception as e:
 section("16. Real ~/.claude/toolforge.db untouched")
 # ══════════════════════════════════════════════════════════════════════════════
 
-real_db = Path(os.path.expanduser("~/.claude/toolforge.db"))
-if real_db.exists():
-    fail("real DB was created — tests wrote to wrong location", str(real_db))
+_touched, _reason = _real_db_touched()
+if _touched:
+    fail("real DB was modified by tests — wrote to wrong location", _reason)
+elif _REAL_DB_EXISTED:
+    ok("~/.claude/toolforge.db: pre-existed and was not created/modified by tests")
 else:
     ok("~/.claude/toolforge.db: does not exist (never touched)")
 
@@ -1107,9 +1140,11 @@ if _bs_ok:
 section("23. Real ~/.claude files still untouched (v6 check)")
 # ══════════════════════════════════════════════════════════════════════════════
 
-_real_db_v6 = Path(os.path.expanduser("~/.claude/toolforge.db"))
-if _real_db_v6.exists():
-    fail("real DB exists after v6 tests — location may have been leaked", str(_real_db_v6))
+_touched_v6, _reason_v6 = _real_db_touched()
+if _touched_v6:
+    fail("real DB modified after v6 tests — location may have been leaked", _reason_v6)
+elif _REAL_DB_EXISTED:
+    ok("~/.claude/toolforge.db: pre-existed, still unchanged after v6 tests")
 else:
     ok("~/.claude/toolforge.db: still does not exist after v6 tests")
 

@@ -103,8 +103,6 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
 
 SUPPORTED_CATEGORIES = frozenset(CATEGORY_KEYWORDS.keys())
 TOOL_NAME_RE = re.compile(r"^[a-z0-9._@/-]{1,80}$")
-# WARN: NEW — SAFE_NAME_RE is unused after F21 (canonical _normalize_name imported from toolforge_usage_detector). Safe to remove in a follow-up.
-SAFE_NAME_RE = re.compile(r"[^a-z0-9._@/-]+")
 
 FRONTMATTER_NAME_RE = re.compile(r"^name:\s*(.+?)\s*$", re.MULTILINE)
 FRONTMATTER_DESCRIPTION_RE = re.compile(r"^description:\s*(.+?)\s*$", re.MULTILINE)

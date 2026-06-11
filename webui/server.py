@@ -299,6 +299,8 @@ class Handler(BaseHTTPRequestHandler):
                         500,
                     )
                     return
+                # Removed an exported skill dir — inventory now reports stale data.
+                inventory_mod.invalidate_inventory_cache()
                 self._send_json({"ok": True, "removed_local": removed_local, "removed_skill": True})
                 return
             self.send_error(HTTPStatus.NOT_FOUND, f"unknown route: {path}")
@@ -362,6 +364,8 @@ class Handler(BaseHTTPRequestHandler):
                         400,
                     )
                     return
+                # Wrote a new exported skill dir — inventory now reports stale data.
+                inventory_mod.invalidate_inventory_cache()
                 self._send_json(result)
                 return
             # WARN: see SKETCHY_CODE_AUDIT.md#s1-2 — FIXED in F02 (.html dropped from ALLOWED_OPEN_EXTS; _open_path_ok rejects .html with 403 "extension not allowed").

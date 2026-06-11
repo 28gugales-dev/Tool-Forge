@@ -118,17 +118,21 @@ def check_health() -> dict:
                 usage[name] = {"count_30d": count or 0, "last_used_at": last_used}
 
         # --- ratings ---
+        # Fetch rated_at and compute age in Python: stored timestamps are
+        # millisecond ISO with a trailing 'Z' (e.g. ...000Z), which SQLite's
+        # julianday(...,'utc') returns NULL for — that NULL became age 0 and
+        # made ancient ratings look brand-new, skewing low-rated detection.
         rating_rows = conn.execute(
             f"""
-            SELECT tool_name, rating,
-                   julianday('now') - julianday(rated_at, 'utc') AS age_days
+            SELECT tool_name, rating, rated_at
             FROM ratings WHERE tool_name IN ({ph})
             """,
             installed_names,
         ).fetchall()
         ratings: dict[str, list[tuple[int, float]]] = {}
-        for name, r, age in rating_rows:
-            ratings.setdefault(name, []).append((int(r), float(age or 0)))
+        for name, r, rated_at in rating_rows:
+            age = _days_ago(rated_at)
+            ratings.setdefault(name, []).append((int(r), age if age is not None else 0.0))
 
         # --- deprecations ---
         dep_rows = conn.execute(

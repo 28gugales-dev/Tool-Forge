@@ -27,8 +27,12 @@ PACKAGES_DIR = HERE.parent / "catalog" / "packages"
 
 
 def load_catalog() -> dict[str, dict]:
-    with open(CATALOG_FILE, encoding="utf-8") as f:
-        entries = json.load(f)
+    try:
+        with open(CATALOG_FILE, encoding="utf-8") as f:
+            entries = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"Error: could not read catalog file {CATALOG_FILE}: {e}", file=sys.stderr)
+        sys.exit(1)
     return {e["name"]: e for e in entries}
 
 
@@ -38,12 +42,16 @@ def load_package(package_id: str) -> list[str]:
         available = [p.stem for p in PACKAGES_DIR.glob("*.json")]
         print(f"Package '{package_id}' not found. Available: {', '.join(sorted(available))}", file=sys.stderr)
         sys.exit(1)
-    with open(pkg_file, encoding="utf-8") as f:
-        pkg = json.load(f)
+    try:
+        with open(pkg_file, encoding="utf-8") as f:
+            pkg = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"Error: could not read package file {pkg_file}: {e}", file=sys.stderr)
+        sys.exit(1)
     return [t["name"] for t in pkg.get("tools", [])]
 
 
-def build_fragment(names: list[str], catalog: dict[str, dict]) -> dict:
+def build_fragment(names: list[str], catalog: dict[str, dict]) -> tuple[dict, list[str]]:
     servers: dict[str, dict] = {}
     warnings: list[str] = []
 
@@ -61,7 +69,7 @@ def build_fragment(names: list[str], catalog: dict[str, dict]) -> dict:
         key = name
         servers[key] = {k: v for k, v in cfg.items()}
 
-        if entry.get("requires_api_key") and "env" in cfg:
+        if entry.get("requires_api_key"):
             env_var = entry.get("api_key_env", "")
             api_url = entry.get("api_key_url", "")
             hint = f"  {name}: set {env_var}"

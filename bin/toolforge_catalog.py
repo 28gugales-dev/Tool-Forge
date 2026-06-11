@@ -45,18 +45,41 @@ STOP_WORDS: set[str] = {
 }
 
 _catalog_cache: Optional[list[dict]] = None
+# Derived caches for suggest()'s hot path. Built once from _catalog_cache and
+# invalidated together with it. Never populated from a failed/empty load (see
+# load_catalog) — guarded on _catalog_cache being set.
+_index_cache: Optional[dict[str, list[str]]] = None
+_entry_map_cache: Optional[dict[str, dict]] = None
 
 
 # ── loaders ───────────────────────────────────────────────────────────────────
 
 def load_catalog(category: Optional[str] = None) -> list[dict]:
-    """Load all catalog entries, optionally filtered to a category slug."""
+    """Load all catalog entries, optionally filtered to a category slug.
+
+    Entries lacking a non-empty "name" are dropped (consumers index by name
+    and would otherwise KeyError). A malformed catalog file degrades to an
+    empty list rather than killing routing fallback; the failure is not cached
+    so a fixed/restored file is picked up on the next call.
+    """
     global _catalog_cache
     if _catalog_cache is None:
         if not CATALOG_FILE.exists():
             return []
-        with open(CATALOG_FILE, encoding="utf-8") as f:
-            _catalog_cache = json.load(f)
+        try:
+            with open(CATALOG_FILE, encoding="utf-8") as f:
+                raw = json.load(f)
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"toolforge_catalog: catalog unreadable, ignoring ({exc})", file=sys.stderr)
+            return []  # do not cache the failure — retry on next call
+        if not isinstance(raw, list):
+            print("toolforge_catalog: catalog is not a JSON list, ignoring", file=sys.stderr)
+            return []
+        kept = [e for e in raw if isinstance(e, dict) and e.get("name")]
+        skipped = len(raw) - len(kept)
+        if skipped:
+            print(f"toolforge_catalog: skipped {skipped} catalog entr(ies) missing a name", file=sys.stderr)
+        _catalog_cache = kept
     if category is None:
         return list(_catalog_cache)
     cat_lower = category.lower()
@@ -101,12 +124,23 @@ def suggest(prompt: str, top_k: int = 3, min_score: int = 1) -> list[dict]:
     Returns up to top_k entries with match_score, installed=False,
     catalog_only=True. Returns [] when nothing matches.
     """
+    global _index_cache, _entry_map_cache
     entries = load_catalog()
     if not entries:
         return []
 
-    idx = _build_keyword_index(entries)
-    entry_map = {e["name"]: e for e in entries}
+    # Catalog is static per process; build the index + entry_map once. Only
+    # cache when load_catalog actually cached (i.e. _catalog_cache is set) so a
+    # failed/empty load is retried rather than frozen, matching load_catalog.
+    if _catalog_cache is not None and _index_cache is not None and _entry_map_cache is not None:
+        idx = _index_cache
+        entry_map = _entry_map_cache
+    else:
+        idx = _build_keyword_index(entries)
+        entry_map = {e["name"]: e for e in entries}
+        if _catalog_cache is not None:
+            _index_cache = idx
+            _entry_map_cache = entry_map
 
     prompt_words = {
         w.lower().strip(".,;:!?()") for w in prompt.split()
@@ -114,11 +148,12 @@ def suggest(prompt: str, top_k: int = 3, min_score: int = 1) -> list[dict]:
     }
 
     scores: dict[str, int] = {}
-    for word in prompt_words:
+    for word in sorted(prompt_words):
         for name in idx.get(word, []):
             scores[name] = scores.get(name, 0) + 1
 
-    ranked = sorted(scores.items(), key=lambda x: -x[1])[:top_k]
+    # Sort by descending score, then name ascending — deterministic ties.
+    ranked = sorted(scores.items(), key=lambda x: (-x[1], x[0]))[:top_k]
     return [
         {
             **entry_map[name],
@@ -303,8 +338,8 @@ def _self_test() -> int:
         original_db = toolforge_db.DB_PATH
         tmp = Path(tempfile.mkdtemp()) / "catalog_seed_test.db"
         toolforge_db.DB_PATH = tmp
-        global _catalog_cache
-        _catalog_cache = None
+        global _catalog_cache, _index_cache, _entry_map_cache
+        _catalog_cache = _index_cache = _entry_map_cache = None
 
         # init_db() on a brand-new DB triggers seeding as a side effect.
         toolforge_db.init_db()
@@ -331,13 +366,13 @@ def _self_test() -> int:
             print(f"FAIL: seed_db returned {n2} on second call (expected 0)")
             failed += 1
 
-        _catalog_cache = None
+        _catalog_cache = _index_cache = _entry_map_cache = None
     except Exception as exc:
         print(f"FAIL: seed_db test raised {exc}")
         failed += 1
     finally:
         toolforge_db.DB_PATH = original_db
-        _catalog_cache = None
+        _catalog_cache = _index_cache = _entry_map_cache = None
         try:
             tmp.unlink()
             tmp.parent.rmdir()

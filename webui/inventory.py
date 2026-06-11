@@ -19,6 +19,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from collections import defaultdict
@@ -465,7 +466,52 @@ def _dedupe(items: list[dict]) -> list[dict]:
 
 
 # ---------- section: public-api ----------
-def build_inventory() -> dict:
+# TTL cache: build_inventory() runs 7 filesystem scans (incl. PLUGIN_CACHE.rglob
+# over the whole plugin tree) + a DB ratings query — full cost on every UI refresh.
+# Cache the result for INVENTORY_CACHE_TTL seconds. Lock guards the dict swap only,
+# NOT the scan: a duplicate concurrent scan under racing threads is acceptable
+# (idempotent, read-only); torn state (built_at without matching data) is not.
+INVENTORY_CACHE_TTL = 20.0  # seconds
+_inventory_cache: dict = {"built_at": 0.0, "data": None}
+_inventory_cache_lock = threading.Lock()
+
+
+def invalidate_inventory_cache() -> None:
+    """Drop the cached inventory so the next build_inventory() re-scans.
+
+    Call after any IN-PROCESS mutation that changes what the inventory reports
+    (e.g. a skill export writes a new SKILL.md, a flow delete removes an
+    exported skill). Mutations from other processes (CLI installs, hook
+    rating writes via toolforge_db) cannot reach this cache — they ride the
+    INVENTORY_CACHE_TTL window by design.
+    """
+    with _inventory_cache_lock:
+        _inventory_cache["built_at"] = 0.0
+        _inventory_cache["data"] = None
+
+
+def build_inventory(force: bool = False) -> dict:
+    """Return the full inventory dict, served from a TTL cache when warm.
+
+    force=True bypasses the cache (fresh scan) and refreshes it. Output shape is
+    unchanged from the underlying scan.
+    """
+    if not force:
+        # Read both fields under the lock so data/built_at always pair up
+        # (server is ThreadingHTTPServer — concurrent readers + invalidation).
+        with _inventory_cache_lock:
+            cached = _inventory_cache["data"]
+            built_at = _inventory_cache["built_at"]
+        if cached is not None and (time.monotonic() - built_at) < INVENTORY_CACHE_TTL:
+            return cached
+    data = _build_inventory()
+    with _inventory_cache_lock:
+        _inventory_cache["data"] = data
+        _inventory_cache["built_at"] = time.monotonic()
+    return data
+
+
+def _build_inventory() -> dict:
     raw: list[dict] = []
     raw.extend(_scan_skill_dir(USER_SKILLS_DIR, "user"))
     raw.extend(_scan_plugin_internal_skills())
@@ -535,7 +581,7 @@ def curate(category: str, limit: int = MAX_CURATE_PER_CATEGORY) -> list[dict]:
             f"unsupported curator category {category!r}: "
             f"pick one of {sorted(SUPPORTED_CURATE_CATEGORIES)}"
         )
-    inv = build_inventory()
+    inv = build_inventory(force=True)
     out: list[dict] = []
     for it in inv.get("items", []):
         path_str = it.get("path") or ""

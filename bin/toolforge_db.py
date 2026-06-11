@@ -50,9 +50,11 @@ def _validate_category(cat: str) -> str:
 
 def _connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH), timeout=3.0)
+    # timeout (Python-level retry loop) and busy_timeout (SQLite-level) cover
+    # different wait paths; keep both, aligned at 10s for multi-writer (webui+bridge+hooks).
+    conn = sqlite3.connect(str(DB_PATH), timeout=10.0)
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=3000")
+    conn.execute("PRAGMA busy_timeout=10000")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
@@ -86,11 +88,55 @@ def _validate_url(url: str) -> str:
 
 # ---------- section: schema-init ----------
 
+# Path-keyed guard: full DDL runs once per resolved DB path. Keyed (not a bare
+# bool) because _self_test swaps DB_PATH to a tmp file — the guard must not leak
+# the real-DB entry onto the tmp path or vice versa.
+_initialized: dict[str, bool] = {}
 
-def init_db() -> None:
+
+def _exec_ddl(conn: sqlite3.Connection, script: str) -> None:
+    """Run a multi-statement DDL block inside the current transaction.
+
+    Unlike conn.executescript(), this does NOT issue an implicit COMMIT, so the
+    BEGIN IMMEDIATE write lock held by init_db survives across all migration blocks.
+    Statements are split with sqlite3.complete_statement, which respects
+    semicolons inside string literals and trigger bodies (a naive split breaks
+    the day the schema gains a CREATE TRIGGER ... BEGIN ... END block).
+    """
+    buf = ""
+    for line in script.splitlines(keepends=True):
+        buf += line
+        if sqlite3.complete_statement(buf):
+            stmt = buf.strip()
+            if stmt and stmt != ";":
+                conn.execute(stmt)
+            buf = ""
+    stmt = buf.strip().rstrip(";").strip()
+    if stmt:
+        conn.execute(stmt)
+
+
+def init_db(force: bool = False) -> None:
+    # resolve() is fine on a not-yet-existing path; an existence-conditional key
+    # would change between the first call (parent missing) and the second
+    # (parent created by _connect), silently defeating the guard.
+    key = str(DB_PATH.resolve())
+    if not force and _initialized.get(key):
+        return
     conn = _connect()
     try:
-        conn.executescript(
+        # BEGIN IMMEDIATE acquires the write lock up front, so two processes can't
+        # both observe user_version==0 and both seed (F-race). executescript()
+        # issues an implicit COMMIT that would drop that lock, so DDL goes through
+        # _exec_ddl (statement-by-statement, no auto-commit) and we read
+        # user_version *after* the lock is held. Migration blocks stay idempotent
+        # (CREATE TABLE IF NOT EXISTS, current<N gating); seeding still fires only
+        # when current==0, now decided atomically under the lock.
+        conn.isolation_level = None
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute("PRAGMA user_version").fetchone()[0]
+        _exec_ddl(
+            conn,
             """
             CREATE TABLE IF NOT EXISTS installs (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,11 +153,11 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_ratings_tool ON ratings(tool_name);
             CREATE INDEX IF NOT EXISTS idx_installs_tool ON installs(tool_name);
-            """
+            """,
         )
-        current = conn.execute("PRAGMA user_version").fetchone()[0]
         if current < 2:
-            conn.executescript(
+            _exec_ddl(
+                conn,
                 """
                 CREATE TABLE IF NOT EXISTS usage_stats (
                     tool_key     TEXT PRIMARY KEY,
@@ -139,7 +185,8 @@ def init_db() -> None:
                 """
             )
         if current < 3:
-            conn.executescript(
+            _exec_ddl(
+                conn,
                 """
                 CREATE TABLE IF NOT EXISTS pipelines (
                     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -156,7 +203,8 @@ def init_db() -> None:
                 """
             )
         if current < 5:
-            conn.executescript(
+            _exec_ddl(
+                conn,
                 """
                 CREATE TABLE IF NOT EXISTS token_stats (
                     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -220,7 +268,8 @@ def init_db() -> None:
                 """
             )
         if current < 6:
-            conn.executescript(
+            _exec_ddl(
+                conn,
                 """
                 CREATE TABLE IF NOT EXISTS user_preferences (
                     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -264,18 +313,27 @@ def init_db() -> None:
             )
         if current < SCHEMA_VERSION:
             conn.execute(f"PRAGMA user_version = {int(SCHEMA_VERSION)}")
-        conn.commit()
+        conn.execute("COMMIT")
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
+        raise
     finally:
         conn.close()
 
     # Seed catalog on brand-new installs only (not on upgrades — existing users
     # already have real rating data that should not be polluted with synthetic rows).
+    # `current` was read under the IMMEDIATE lock, so exactly one process sees 0.
     if current == 0:
         try:
             import toolforge_catalog  # type: ignore
             toolforge_catalog.seed_db()
         except Exception:
             pass  # catalog seeding is best-effort; never block init
+
+    _initialized[key] = True
 
 
 # ---------- section: installs-table ----------
