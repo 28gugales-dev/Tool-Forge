@@ -229,13 +229,21 @@ def _recency_norm_from_path(path: Path) -> Optional[float]:
     recency_norm in [0.0, 1.0]; a 0.0 sentinel was indistinguishable from a genuinely
     stale tool, so the entry is dropped with a stderr warning instead.
     """
+    # Path.exists() re-raises OSErrors whose errno is not in pathlib's ignore
+    # list on Python 3.10-3.13 (3.14 swallows them all) — a stat failure during
+    # the .git walk must mean "not a repo", not a crash.
     git_dir = path
-    while git_dir != git_dir.parent:
-        if (git_dir / ".git").exists():
-            break
-        git_dir = git_dir.parent
+    has_git = False
+    try:
+        while git_dir != git_dir.parent:
+            if (git_dir / ".git").exists():
+                has_git = True
+                break
+            git_dir = git_dir.parent
+    except OSError:
+        has_git = False
     last_commit_epoch: Optional[float] = None
-    if (git_dir / ".git").exists():
+    if has_git:
         git_exe = shutil.which("git")
         if git_exe:
             try:

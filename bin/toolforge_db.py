@@ -2209,4 +2209,10 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    # Register this instance under the canonical module name BEFORE helpers like
+    # toolforge_catalog.seed_db() run `import toolforge_db`. Without this, that
+    # import creates a SECOND module instance whose DB_PATH is the real path even
+    # while _self_test has swapped this instance's DB_PATH to a temp file — the
+    # seeding connect then leaks an empty zero-table toolforge.db at the real path.
+    sys.modules.setdefault("toolforge_db", sys.modules[__name__])
     sys.exit(main(sys.argv))
