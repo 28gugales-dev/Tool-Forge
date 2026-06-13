@@ -91,6 +91,7 @@ def main() -> int:
     skills_used: list[str] = []
     task_type = cfg.get("learner_task_type", "")
     error = ""
+    shortcut_count = 0
 
     try:
         import toolforge_db as db
@@ -114,8 +115,14 @@ def main() -> int:
         if skills_used and task_type:
             profile.record_session_signals(task_type, skills_used)
 
-        newly_detected = profile.detect_shortcuts_from_pipelines()
-        shortcut_count = len(newly_detected)
+        # Shortcut detection reads the pipelines table, which may be absent on a
+        # partially-migrated DB. Isolate it so a failure here doesn't discard the
+        # preference signals already recorded above.
+        try:
+            newly_detected = profile.detect_shortcuts_from_pipelines()
+            shortcut_count = len(newly_detected)
+        except Exception as exc:
+            error += f" shortcuts:{exc}"
 
         # Optionally push to Hermes
         if cfg.get("learner_push_hermes") and skills_used:

@@ -40,8 +40,16 @@ _HEX_LEN = 64
 
 
 def _hash_file(path: Path) -> str:
-    with path.open("rb") as fh:
-        return hashlib.file_digest(fh, "sha256").hexdigest()
+    """sha256 of the LF-normalized bytes (CRLF -> LF, stray CR -> LF).
+
+    Avoids hashlib.file_digest (3.11+) for 3.10 support. The fallback manifest is
+    committed against git-canonical (LF) content; under core.autocrlf=true a
+    Windows checkout has CRLF on disk and a byte-exact hash would spuriously
+    mismatch. Normalizing matches git's text=auto digest (and toolforge_validate_repo
+    ._sha256_lf) so the check passes identically on Windows and Linux.
+    """
+    raw = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(raw).hexdigest()
 
 
 def _is_hex_digest(s: str) -> bool:

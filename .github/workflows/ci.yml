@@ -1,0 +1,38 @@
+name: CI
+
+# Repo self-consistency gate. toolforge_validate_repo.py runs every bin/*.py
+# --self-test internally (check e), so this is the whole test suite in one step.
+# Stdlib-only by design — no dependency-install step is needed or wanted.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.10', '3.13']  # 3.10 = README support floor; 3.13 = current
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Validate repo (runs all bin self-tests)
+        run: python bin/toolforge_validate_repo.py
+
+      - name: Validate repo (JSON, on failure)
+        if: failure()
+        run: python bin/toolforge_validate_repo.py --json
