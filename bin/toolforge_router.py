@@ -422,7 +422,7 @@ def _self_test() -> int:
 def _usage_str() -> str:
     return (
         "Usage:\n"
-        "  toolforge_router.py route <prompt text...>\n"
+        "  toolforge_router.py route [--json] <prompt text...>\n"
         "  toolforge_router.py --self-test\n"
     )
 
@@ -440,11 +440,17 @@ def main(argv: list[str]) -> int:
     if argv[0] != "route":
         print(_usage_str(), file=sys.stderr)
         return 2
-    prompt = " ".join(argv[1:]).strip()
+    # --json may appear anywhere among the route args; everything else is prompt.
+    rest = argv[1:]
+    as_json = "--json" in rest
+    prompt = " ".join(a for a in rest if a != "--json").strip()
     if not prompt:
         print("route: prompt required", file=sys.stderr)
         return 2
     results = route(prompt)
+    if as_json:
+        print(json.dumps(results))
+        return 0
     if not results:
         print("No matching skills above threshold.")
         return 0

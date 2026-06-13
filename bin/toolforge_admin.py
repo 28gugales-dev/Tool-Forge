@@ -116,6 +116,10 @@ def purge_stale(stale_days: int = 90) -> list[str]:
 def auto_retire_low_performers(error_rate_threshold: float = 0.5,
                                 min_calls: int = 10) -> list[str]:
     """Auto-retire skills with error_rate above threshold and sufficient call volume."""
+    # error_rate comes from real skill_performance rows, now populated per-invocation
+    # by hooks/post-tool-use-perf.py. Before that hook existed the table stayed empty,
+    # so this loop saw nothing and never retired — the table, not this accessor, was
+    # the gap. Thresholds (0.5 error rate / 10 calls) are unchanged.
     perfs = db.get_skill_performance_all()
     retired = []
     for p in perfs:

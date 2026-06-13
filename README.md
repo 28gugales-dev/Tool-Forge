@@ -12,6 +12,7 @@
 [![Claude Web](https://img.shields.io/badge/Claude%20Web-project%20prompt-blue)](https://claude.ai)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org)
 [![No external deps](https://img.shields.io/badge/deps-stdlib%20only-green)](pyproject.toml)
+[![CI](https://github.com/28gugales-dev/Tool-Forge/actions/workflows/ci.yml/badge.svg)](https://github.com/28gugales-dev/Tool-Forge/actions/workflows/ci.yml)
 
 </div>
 
@@ -21,7 +22,7 @@
 
 ## What ToolForge does
 
-Fourteen systems, one install:
+Twenty systems, one install:
 
 | Feature | What it does |
 |---|---|
@@ -30,7 +31,7 @@ Fourteen systems, one install:
 | **Suggested skills** | 25 task-type maps (frontend, auth, testing, AI/LLM, …) inject 2–3 known-good tools before live search runs. Always a great starting point. |
 | **Curated packages** | Six named bundles (`best-for-business`, `best-for-coding`, `best-for-design`, `best-for-token-reduction`, `best-for-personal`, `best-for-testing`). Install a whole stack with one command. |
 | **Auto-router** | Fires on every prompt before Claude sees it. Scores all installed skills with TF-IDF cosine similarity in under 80ms. Injects the right skill when a strong match exists. |
-| **Predictive layer** | Fires once per session. Analyses pipeline history, usage frequency, and the current prompt to predict which skills you will need — before you ask. |
+| **Predictive layer** | Fires once per session — wired into `plugin.json` as of v0.4 (previously shipped but never registered, and the router call path it depends on was broken). Analyses pipeline history, usage frequency, and the current prompt to predict which skills you will need — before you ask. |
 | **Pipeline orchestrator** | `/forge` decomposes any multi-phase task into an ordered skill chain, renders an ASCII plan, waits for approval, then executes step by step with context flowing between steps. Saves every chain for instant reuse. |
 | **Task hunter** | `/toolforge-hunt` finds the single best tool for a specific task, installs it, and immediately starts working — no second prompt. |
 | **Learning loop** | Rates every tool after each session. Bayesian-shrunk Likert scores with a 75-day exponential half-life re-rank all future discovery, routing, and pipeline results automatically. |
@@ -40,6 +41,11 @@ Fourteen systems, one install:
 | **Adaptive profile** | Learns which skills you prefer per task type across sessions. Preference-adjusted routing re-ranks results to match your personal workflow. Detects recurring skill sequences and saves them as one-click shortcuts. |
 | **Bridge API** | Local REST server (port 7842) exposes ToolForge state to external agents. Hermes can pull context. Obsidian can receive daily session notes. Any webhook-capable tool can integrate. |
 | **Security model** | URL allow-list (7 hosts), install command sandbox (`argv[0]` allow-list, `shell=False`), and a semantic malware scan before any web-discovered tool is allowed to run. |
+| **Stack detection** | Bare `/toolforge` scans your repo's manifests, detects the tech stack (32 technologies across 5 categories), recommends ranked categories, and boosts stack-matching candidates in the top 5. No more hand-typed categories on a cold start. |
+| **Self-improvement loop** | `/toolforge-improve` names your worst-rated skill, packages its content and rating history for a rewrite, snapshots the original into SQLite, then runs a frontier update-or-discard gate: a rewrite is promoted only if its fresh shrunk score beats the best generation kept so far; otherwise SKILL.md is auto-reverted to the frontier. `lineage <skill>` renders the full generation tree. Discarded ideas are never re-proposed. |
+| **Pluggable scorers** | `bin/toolforge_scorers.py` measures skills objectively from recorded performance data: `latency`, `reliability`, `token_efficiency`, and a renormalizing `composite`. `score <skill>` and `leaderboard` CLI verbs, extensible via `register()`. Fed by a `PostToolUse` hook that captures per-invocation latency and errors for installed skills. |
+| **Repo validation + CI** | `bin/toolforge_validate_repo.py` checks the repo against itself: every hook in `plugin.json` resolves, every command and skill parses, every `bin/*.py` compiles and passes its `--self-test`, and the offline-fallback manifest verifies. GitHub Actions runs it on Ubuntu + Windows across Python 3.10 and 3.13. |
+| **Integrity lockfile** | Pins per-file sha256 + a bundle hash at install time. `/toolforge-status` re-verifies every pinned tool and renders verified / MODIFIED / missing badges — supply-chain drift after the install-time malware scan is no longer invisible. |
 
 ---
 
@@ -49,9 +55,9 @@ Fourteen systems, one install:
 <summary><strong>Claude Code</strong></summary>
 
 1. Clone or download this repo.
-2. Run:
+2. From the repo root, run:
    ```bash
-   claude plugin marketplace add ./toolforge
+   claude plugin marketplace add .
    claude plugin install toolforge@local-toolforge
    ```
 3. Done — slash commands, skills, and hooks are registered automatically.
@@ -142,7 +148,7 @@ Same model. Same prompt. Different tool surface.
 
 | Command | What it does |
 |---|---|
-| `/toolforge <category>` | Discover and install the top 5 tools for a category. Valid: `UI`, `backend`, `database`, `testing`, `devops`. |
+| `/toolforge [category]` | Discover and install the top 5 tools for a category. Valid: `UI`, `backend`, `database`, `testing`, `devops`. With no argument, detects your repo's tech stack and recommends a category. |
 | `/toolforge-packages [id]` | Browse and install curated tool bundles by use case. See [Curated Packages](#curated-packages) below. |
 | `/toolforge-hunt <task>` | Find the single best skill or MCP server for a specific task, install it, then immediately start working. |
 | `/forge <multi-phase task>` | Decompose a complex task into a pipeline of skills, show the plan, get approval, then execute each step in sequence. |
@@ -150,6 +156,7 @@ Same model. Same prompt. Different tool surface.
 | `/toolforge-admin [sub]` | Admin panel: retire skills, override ratings, manage org profiles, create stacks, run self-management routines. |
 | `/toolforge-status` | Live dashboard: install count, top-rated tools, health warnings, router cache status. |
 | `/toolforge-rate <1-5>` | Rate the most recently installed tool. Feeds directly into future rankings. |
+| `/toolforge-improve [sub]` | Rewrite the worst-rated skill with a SQLite-versioned backup. `verdict` runs the frontier gate (promote only if the rewrite beats the best generation so far, auto-revert otherwise); `lineage <skill>` renders the generation tree; `rollback` restores the original instantly. |
 | `/toolforge-rescan` | Force-refresh the local-scan cache and router index after installing or removing tools. |
 | `/toolforge-profile [sub]` | View and manage your adaptive preference profile. Record feedback, list detected shortcuts, or query top skills per task type. |
 | `/toolforge-bridge [sub]` | Manage the REST API bridge server. Check Hermes/Obsidian sync status, export context bundle, or start the bridge on port 7842. |
@@ -367,7 +374,7 @@ Results are cached at `tempdir/toolforge_local_scan_<category>.json` for 5 minut
 
 ## Storage
 
-All ToolForge data lives in `~/.claude/toolforge.db` (SQLite, schema v6):
+All ToolForge data lives in `~/.claude/toolforge.db` (SQLite, schema v8):
 
 | Table | Contents |
 |---|---|
@@ -384,10 +391,14 @@ All ToolForge data lives in `~/.claude/toolforge.db` (SQLite, schema v6):
 | `user_preferences` | task_type_id, skill_name, preference_score, positive_signals, negative_signals |
 | `workflow_shortcuts` | shortcut_name, trigger_skills, steps_json, hit_count, auto_detected |
 | `context_sync` | integration, direction, payload_hash, status, synced_at |
+| `skill_versions` | skill_name, generation, parent_generation, skill_md_backup, proposal, outcome, baseline_score, eval_score |
+| `install_artifacts` | tool_name, rel_path, sha256, bundle_hash, pinned_at |
+| `skill_frontier` | skill_name, generation, score, updated_at — best generation kept by the improve loop's update-or-discard gate |
+| `scorer_results` | skill_name, scorer, score, detail, created_at — append-only objective scorer history |
 
 ```bash
 # Inspect
-python toolforge/bin/toolforge_db.py status
+python bin/toolforge_db.py status
 
 # Reset everything
 rm ~/.claude/toolforge.db
@@ -547,7 +558,9 @@ Add your own mappings or override these in `catalog/suggestions.json`.
 
 ## Predictive layer
 
-ToolForge v0.3 adds a `UserPromptSubmit` hook (`hooks/session-start-predictor.py`) that fires **once at the start of every session**. It analyses your pipeline history, recent usage, and the current prompt to predict which skills you are most likely to need.
+A `UserPromptSubmit` hook (`hooks/session-start-predictor.py`) fires **once at the start of every session**. It analyses your pipeline history, recent usage, and the current prompt to predict which skills you are most likely to need.
+
+Introduced in v0.3 but dead on arrival — the hook was never registered in `plugin.json`, and the predictor called the router CLI with an unsupported flag so the 40%-weight router signal silently returned nothing. **v0.4 wires it for real**: the hook is registered, the router grew a `--json` output mode, and the predictor degrades gracefully (one stderr line, never blocking) when any signal source is unavailable.
 
 ```
 [ToolForge predictor] Skills likely needed this session:

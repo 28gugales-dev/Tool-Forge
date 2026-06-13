@@ -23,6 +23,8 @@ Run TWO `WebSearch` queries in parallel:
 1. `top Claude Code plugins MCP servers skills for {category} 2026`
 2. `site:github.com topic:mcp-server {category}`
 
+**Stack context (zero-argument flow)**: when the `/toolforge` command ran stack detection (bare `/toolforge`, see `commands/toolforge.md` Step 0) and forwarded detected tech ids, append the top 2-3 detected tech names to query 1 as extra keywords, e.g. `top Claude Code plugins MCP servers skills for {category} nextjs supabase 2026`. Tech names are additive keywords only — they never replace the category term, and the absence of stack context changes nothing.
+
 Collect every distinct URL across both result sets.
 
 ### 1b. Local-source scan (parallel with web search)
@@ -133,6 +135,8 @@ Two formulas, branched on entry origin. Bayesian Likert shrinkage is identical i
 - `score = stars_norm * 0.3 + recency_norm * 0.3 + likert_norm * 0.4` (same weights).
 
 **Installed bonus**: any entry with `installed == true` gets a `+0.10` flat bonus added to its final composite score. Rationale: the user already has it on their machine, surfacing it slightly above an unrated web result is a visibility win (zero install friction, known-good).
+
+**Stack-match bonus**: when stack context is present (bare `/toolforge` flow — `toolforge_stack_detect.py` output forwarded by the command), any candidate whose `name` or `description` contains a detected tech id (case-insensitive substring: `nextjs`, `supabase`, `tailwind`, ...) gets a flat `+0.10` bonus added to its final composite score. Applied at most once per candidate (two tech matches do NOT stack to +0.20); it DOES stack with the installed bonus; the final score is capped at 1.0 after all bonuses. When no stack context was passed (user typed an explicit category), this bonus does not exist. Rationale: a candidate that names the user's actual stack beats an equally-scored generic tool — this is what makes the zero-argument cold-start flow recommend `supabase-postgres-best-practices` over a generic SQL tool in a Supabase repo.
 
 Worked numbers (Bayesian Likert, applies to both branches):
 - n=0 unrated:                          likert_norm = 0.60

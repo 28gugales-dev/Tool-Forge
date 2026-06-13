@@ -100,6 +100,29 @@ def _safe_log(tool_name: str, category: str, approved: bool) -> Optional[str]:
         return error_id
 
 
+def _maybe_pin(tool_name: str) -> None:
+    """Best-effort sha256 pin of an installed tool's files (integrity lockfile).
+
+    Never raises and never changes install exit codes — a failed pin only
+    means /toolforge-status shows the tool as 'unpinned' instead of 'verified'.
+    Mirrors _safe_log's errorId pattern so audit drops stay visible.
+    """
+    try:
+        for kind in ("skills", "plugins"):
+            target = Path.home() / ".claude" / kind / tool_name
+            if target.is_dir():
+                import toolforge_lockfile
+                toolforge_lockfile.pin(tool_name, str(target))
+                return
+    except Exception as exc:
+        error_id = secrets.token_hex(4)
+        print(
+            f"toolforge audit [errorId={error_id}]: integrity pin skipped for "
+            f"{tool_name} ({type(exc).__name__}): {exc}",
+            file=sys.stderr,
+        )
+
+
 def _validate_npx_uvx(argv: list[str], head: str) -> None:
     for t in argv[1:]:
         reason = _safe_token(t)
@@ -331,6 +354,7 @@ def install(
         return 4
 
     error_id = _safe_log(tool_name, category, approved=True)
+    _maybe_pin(tool_name)
     if error_id is not None:
         print(
             f"\ntoolforge: WARNING — install of {tool_name} succeeded but "
@@ -457,6 +481,7 @@ def install_batch(items: list[dict], auto_yes: bool) -> int:
             any_child_fail = True
             continue
         error_id = _safe_log(name, cat, approved=True)
+        _maybe_pin(name)
         if error_id is not None:
             any_audit_fail = True
             print(
@@ -550,6 +575,26 @@ def _self_test() -> int:
                 )
             print(f"FAIL: {desc}: {reason}")
             failed += 1
+
+    # _maybe_pin on a tool installed nowhere must be a silent no-op:
+    # no exception, no stderr warning, no exit-code influence.
+    import contextlib
+    import io
+
+    captured = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(captured):
+            _maybe_pin("toolforge-selftest-nonexistent-tool")
+        if captured.getvalue() == "":
+            print("OK: _maybe_pin on nonexistent tool is a silent no-op")
+            passed += 1
+        else:
+            print(f"FAIL: _maybe_pin emitted stderr: {captured.getvalue()!r}")
+            failed += 1
+    except Exception as exc:
+        print(f"FAIL: _maybe_pin raised {type(exc).__name__}: {exc}")
+        failed += 1
+
     print(f"--- self-test: {passed} passed, {failed} failed ---")
     return 0 if failed == 0 else 1
 

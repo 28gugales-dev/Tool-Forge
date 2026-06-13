@@ -78,6 +78,8 @@ def check_health() -> dict:
         conn = _connect()
     except FileNotFoundError:
         return {"error": "no_db", "flags": [], "checked_at": _now()}
+    except sqlite3.Error as exc:
+        return {"error": f"db_error: {exc}", "flags": [], "checked_at": _now()}
 
     try:
         # --- installed tools ---
@@ -147,6 +149,10 @@ def check_health() -> dict:
             for name, arch, push in dep_rows
         }
 
+    except sqlite3.Error as exc:
+        # Empty or partially-initialized DB (e.g. a leaked zero-table file):
+        # health is simply unknown, never a crash.
+        return {"error": f"db_error: {exc}", "flags": [], "checked_at": _now()}
     finally:
         conn.close()
 

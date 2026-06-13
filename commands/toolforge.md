@@ -1,6 +1,6 @@
 ---
-description: Discover top Claude Code plugins, MCP servers, and skills for a category (UI, backend, database, testing, devops). Live web search plus Likert-rated re-ranking.
-argument-hint: <category>
+description: Discover top Claude Code plugins, MCP servers, and skills for a category (UI, backend, database, testing, devops). Bare /toolforge detects your repo's stack and recommends a category. Live web search plus Likert-rated re-ranking.
+argument-hint: [category]
 ---
 
 You are running the `/toolforge` command. The user passed the category argument: **$ARGUMENTS**.
@@ -11,9 +11,30 @@ Your job: perform live tool discovery for that category, surface the top 5 ranke
 
 Local-source scan is cached at `tempdir/toolforge_local_scan_<category>.json` for 5 minutes. Run `/toolforge-rescan` to clear all caches. Pass `--force` (not user-visible from this command, but the curator may auto-invoke on stale-cache detection) to bypass.
 
+## Step 0: Zero-argument stack detection (only when $ARGUMENTS is empty)
+
+If the user passed no category, detect their repo's stack instead of demanding one. Shell out:
+
+```
+python "${CLAUDE_PLUGIN_ROOT}/bin/toolforge_stack_detect.py" detect . --json
+```
+
+Returns `{"technologies": [...], "ranked_categories": [...], "combos": [...]}` — a declarative manifest scan (package.json deps, requirements.txt, pyproject.toml, go.mod, Cargo.toml, docker-compose.yml, config-file existence; root + 2 levels deep, no symlink follow, 5s budget). Cached 5 minutes per absolute path at `tempdir/toolforge_stack_detect_<sha1>.json`; add `--force` to bypass.
+
+1. **Nothing detected** (`technologies` empty): say so, list the supported categories (UI, backend, database, testing, devops), and ask the user to pick one. Stop until they answer.
+2. **Stack detected**: present it compactly:
+
+   ```
+   Detected stack: Next.js, Supabase, Tailwind CSS
+   Recommended categories: 1. database (1.00)  2. ui (0.67)
+   ```
+
+3. Ask: "Search `<top category>` (recommended for your stack)? Or pick another: UI / backend / database / testing / devops."
+4. On confirmation (or an alternate valid pick), proceed to Step 1 with that category in place of `$ARGUMENTS`, and pass the detected tech ids (e.g. `nextjs`, `supabase`, `tailwind`) to the curator as stack context — it uses them as extra WebSearch keywords (skill step 1) and as a `+0.10` stack-match bonus in composite scoring (skill section 6).
+
 ## Step 1: Invoke the curator skill
 
-Invoke the `toolforge-curator` skill with the category `$ARGUMENTS`. The skill:
+Invoke the `toolforge-curator` skill with the category `$ARGUMENTS` (or the category confirmed in Step 0 when `$ARGUMENTS` was empty, forwarding the detected tech ids as stack context). The skill:
 
 1. Runs two `WebSearch` queries in parallel.
 2. Runs `bin/toolforge_local_scan.py scan <category>` in parallel with WebSearch (cached 5 min).
@@ -25,7 +46,7 @@ Invoke the `toolforge-curator` skill with the category `$ARGUMENTS`. The skill:
 8. Falls back fully, or partial-merges with `fallback/$ARGUMENTS.json` if live results are <5.
 9. Returns the top 5 with install commands.
 
-If `$ARGUMENTS` is not one of UI, backend, database, testing, devops, tell the user the supported categories and stop.
+If `$ARGUMENTS` is empty, do NOT stop — run Step 0 (stack detection) first and proceed with the confirmed category. If `$ARGUMENTS` is non-empty but not one of UI, backend, database, testing, devops, tell the user the supported categories and stop.
 
 ## Step 2: Show the user the ranked list
 

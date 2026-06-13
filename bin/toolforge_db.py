@@ -27,7 +27,7 @@ from typing import Optional
 DB_PATH = Path(os.path.expanduser("~/.claude/toolforge.db"))
 # Canonical decay half-life. Imported by toolforge_local_scan.py and webui/inventory.py.
 DECAY_HALFLIFE_DAYS = 75.0  # AI tooling moves fast — was 180d, cut to ~2.5mo
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 8
 BAYES_PRIOR_MEAN = 3.0
 BAYES_PRIOR_WEIGHT = 5.0
 
@@ -309,6 +309,56 @@ def init_db(force: bool = False) -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_sync_int
                     ON context_sync(integration, synced_at DESC);
+                """
+            )
+        if current < 7:
+            _exec_ddl(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS skill_versions (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    skill_name      TEXT NOT NULL,
+                    generation      INTEGER NOT NULL DEFAULT 1,
+                    skill_md_path   TEXT NOT NULL,
+                    skill_md_backup TEXT NOT NULL,
+                    proposal        TEXT,
+                    outcome         TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (outcome IN ('pending','improved','kept','discarded','rolled_back')),
+                    baseline_score  REAL,
+                    created_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_skill_versions_name
+                    ON skill_versions(skill_name, id DESC);
+                """
+            )
+        if current < 8:
+            # ALTER TABLE ADD COLUMN is not idempotent (errors if the column already
+            # exists), but the current<8 gate runs this block at most once during the
+            # upgrade, under the IMMEDIATE write lock — same guarantee every prior
+            # block relies on. Columns are nullable so existing v7 rows stay valid.
+            _exec_ddl(
+                conn,
+                """
+                ALTER TABLE skill_versions ADD COLUMN parent_generation INTEGER;
+                ALTER TABLE skill_versions ADD COLUMN eval_score REAL;
+
+                CREATE TABLE IF NOT EXISTS skill_frontier (
+                    skill_name  TEXT PRIMARY KEY,
+                    generation  INTEGER NOT NULL,
+                    score       REAL NOT NULL,
+                    updated_at  TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS scorer_results (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    skill_name  TEXT NOT NULL,
+                    scorer      TEXT NOT NULL,
+                    score       REAL NOT NULL,
+                    detail      TEXT,
+                    created_at  TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_scorer_results_name_scorer
+                    ON scorer_results(skill_name, scorer);
                 """
             )
         if current < SCHEMA_VERSION:
@@ -1396,6 +1446,185 @@ def get_sync_history(integration: Optional[str] = None, limit: int = 20) -> list
     ]
 
 
+# ---------- section: skill-versions-v7 ----------
+
+# Must stay in sync with the CHECK constraint on skill_versions.outcome.
+SKILL_VERSION_OUTCOMES = {"pending", "improved", "kept", "discarded", "rolled_back"}
+
+
+def save_skill_version(skill_name: str, path: str, backup_text: str,
+                       proposal: Optional[str] = None,
+                       baseline_score: Optional[float] = None) -> int:
+    """Snapshot a skill's full SKILL.md text before an improve-pass rewrite.
+
+    Returns the new row id. generation = 1 + max existing generation for that skill,
+    computed and inserted in one connection so concurrent improves can't fork history.
+    """
+    name = _validate_tool_name(skill_name)
+    if not path or not path.strip():
+        raise ValueError("path must be non-empty")
+    if not backup_text:
+        raise ValueError("backup_text must be non-empty (nothing to roll back to)")
+    init_db()
+    conn = _connect()
+    try:
+        gen = conn.execute(
+            "SELECT COALESCE(MAX(generation), 0) + 1 FROM skill_versions WHERE skill_name = ?",
+            (name,),
+        ).fetchone()[0]
+        cur = conn.execute(
+            """INSERT INTO skill_versions
+               (skill_name, generation, skill_md_path, skill_md_backup, proposal, baseline_score)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (name, int(gen), path.strip(), backup_text, proposal,
+             float(baseline_score) if baseline_score is not None else None),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def get_skill_versions(skill_name: str, limit: int = 10) -> list[dict]:
+    """Return version snapshots for a skill, newest first."""
+    if limit < 1 or limit > 100:
+        raise ValueError("limit must be 1..100")
+    init_db()
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            """SELECT id, skill_name, generation, skill_md_path, skill_md_backup,
+                      proposal, outcome, baseline_score, created_at
+               FROM skill_versions
+               WHERE skill_name = ?
+               ORDER BY id DESC
+               LIMIT ?""",
+            (_normalize(skill_name), int(limit)),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [
+        {"id": r[0], "skill_name": r[1], "generation": r[2],
+         "skill_md_path": r[3], "skill_md_backup": r[4], "proposal": r[5],
+         "outcome": r[6], "baseline_score": r[7], "created_at": r[8]}
+        for r in rows
+    ]
+
+
+def set_skill_version_outcome(version_id: int, outcome: str) -> None:
+    if outcome not in SKILL_VERSION_OUTCOMES:
+        raise ValueError(
+            f"invalid outcome {outcome!r}: must be one of {sorted(SKILL_VERSION_OUTCOMES)}"
+        )
+    init_db()
+    conn = _connect()
+    try:
+        cur = conn.execute(
+            "UPDATE skill_versions SET outcome = ? WHERE id = ?",
+            (outcome, int(version_id)),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            raise ValueError(f"no skill_version with id {version_id}")
+    finally:
+        conn.close()
+
+
+# ---------- section: skill-frontier-v8 ----------
+
+
+def get_frontier(skill_name: str) -> Optional[dict]:
+    """Return the current best-known generation/score for a skill, or None."""
+    init_db()
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT skill_name, generation, score, updated_at FROM skill_frontier WHERE skill_name=?",
+            (_normalize(skill_name),),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return None
+    return {"skill_name": row[0], "generation": row[1], "score": row[2], "updated_at": row[3]}
+
+
+def set_frontier(skill_name: str, generation: int, score: float) -> None:
+    """Upsert the frontier (best-known version) for a skill. updated_at is set server-side."""
+    name = _validate_tool_name(skill_name)
+    init_db()
+    conn = _connect()
+    try:
+        conn.execute(
+            """
+            INSERT INTO skill_frontier (skill_name, generation, score, updated_at)
+            VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            ON CONFLICT(skill_name) DO UPDATE SET
+                generation = excluded.generation,
+                score      = excluded.score,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            """,
+            (name, int(generation), float(score)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def record_scorer_result(skill_name: str, scorer: str, score: float,
+                         detail: Optional[str] = None) -> int:
+    """Append one scorer result for a skill. Returns the new row id. Append-only."""
+    name = _validate_tool_name(skill_name)
+    s = scorer.strip()
+    if not s:
+        raise ValueError("scorer must be non-empty")
+    init_db()
+    conn = _connect()
+    try:
+        cur = conn.execute(
+            """INSERT INTO scorer_results (skill_name, scorer, score, detail, created_at)
+               VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))""",
+            (name, s, float(score), detail),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def get_scorer_results(skill_name: str, scorer: Optional[str] = None,
+                       limit: int = 50) -> list[dict]:
+    """Return scorer results for a skill, newest first. Optionally filter by scorer."""
+    if limit < 1 or limit > 500:
+        raise ValueError("limit must be 1..500")
+    init_db()
+    conn = _connect()
+    try:
+        if scorer is not None:
+            rows = conn.execute(
+                """SELECT id, skill_name, scorer, score, detail, created_at
+                   FROM scorer_results
+                   WHERE skill_name = ? AND scorer = ?
+                   ORDER BY id DESC LIMIT ?""",
+                (_normalize(skill_name), scorer.strip(), int(limit)),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT id, skill_name, scorer, score, detail, created_at
+                   FROM scorer_results
+                   WHERE skill_name = ?
+                   ORDER BY id DESC LIMIT ?""",
+                (_normalize(skill_name), int(limit)),
+            ).fetchall()
+    finally:
+        conn.close()
+    return [
+        {"id": r[0], "skill_name": r[1], "scorer": r[2], "score": r[3],
+         "detail": r[4], "created_at": r[5]}
+        for r in rows
+    ]
+
+
 def _self_test() -> int:
     # WARN: see SKETCHY_CODE_AUDIT.md#s5-3 — FIXED in F40 (stale env-var line removed from docstring).
     """Smoke test that exercises v1 + v2 schema against a temp DB.
@@ -1527,6 +1756,124 @@ def _self_test() -> int:
         print("OK: init_db idempotent")
         passed += 1
 
+        # 10. v7 schema present
+        if SCHEMA_VERSION >= 7 and v >= 7:
+            print("OK: v7 schema (skill_versions) active")
+            passed += 1
+        else:
+            print(f"FAIL: expected schema >= 7, got SCHEMA_VERSION={SCHEMA_VERSION}, v={v}")
+            failed += 1
+
+        # 11. v7 skill_versions roundtrip: save -> outcome update -> list
+        vid1 = save_skill_version("alpha-skill", "/tmp/skills/alpha-skill/SKILL.md",
+                                  "# original v1\n", "tighten the trigger description", 2.4)
+        vid2 = save_skill_version("alpha-skill", "/tmp/skills/alpha-skill/SKILL.md",
+                                  "# original v2\n", "add examples section", 2.6)
+        set_skill_version_outcome(vid1, "improved")
+        versions = get_skill_versions("alpha-skill")
+        if (vid1 > 0 and vid2 > vid1 and len(versions) == 2
+                and versions[0]["id"] == vid2 and versions[0]["generation"] == 2
+                and versions[0]["outcome"] == "pending"
+                and versions[1]["id"] == vid1 and versions[1]["generation"] == 1
+                and versions[1]["outcome"] == "improved"
+                and abs(versions[1]["baseline_score"] - 2.4) < 1e-6
+                and versions[1]["skill_md_backup"] == "# original v1\n"):
+            print("OK: v7 skill_versions roundtrip")
+            passed += 1
+        else:
+            print(f"FAIL: skill_versions got vid1={vid1}, vid2={vid2}, versions={versions}")
+            failed += 1
+
+        # 12. v7 invalid outcome rejected
+        try:
+            set_skill_version_outcome(vid2, "bogus")
+            print("FAIL: invalid outcome accepted")
+            failed += 1
+        except ValueError:
+            print("OK: invalid outcome rejected")
+            passed += 1
+
+        # 13. v8 schema present + new skill_versions columns nullable
+        conn = _connect()
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(skill_versions)").fetchall()}
+        finally:
+            conn.close()
+        if SCHEMA_VERSION >= 8 and v >= 8 and "parent_generation" in cols and "eval_score" in cols:
+            print("OK: v8 schema (skill_frontier, scorer_results, skill_versions.parent_generation/eval_score) active")
+            passed += 1
+        else:
+            print(f"FAIL: expected schema >= 8 with new columns, got v={v}, cols={cols}")
+            failed += 1
+
+        # 14. v8 skill_frontier roundtrip + upsert overwrites
+        if get_frontier("beta-skill") is None:
+            set_frontier("beta-skill", 3, 0.71)
+            f1 = get_frontier("beta-skill")
+            set_frontier("beta-skill", 5, 0.88)
+            f2 = get_frontier("beta-skill")
+            if (f1 and f1["generation"] == 3 and abs(f1["score"] - 0.71) < 1e-6
+                    and f2 and f2["generation"] == 5 and abs(f2["score"] - 0.88) < 1e-6
+                    and f2["updated_at"]):
+                print("OK: v8 skill_frontier roundtrip + upsert")
+                passed += 1
+            else:
+                print(f"FAIL: skill_frontier got f1={f1}, f2={f2}")
+                failed += 1
+        else:
+            print("FAIL: skill_frontier not empty at start")
+            failed += 1
+
+        # 15. v8 scorer_results roundtrip (append-only, scorer filter)
+        sid1 = record_scorer_result("beta-skill", "trigger-eval", 0.6, "matched 3/5")
+        sid2 = record_scorer_result("beta-skill", "trigger-eval", 0.9, None)
+        record_scorer_result("beta-skill", "lint-eval", 0.4, "2 warnings")
+        all_res = get_scorer_results("beta-skill")
+        filtered = get_scorer_results("beta-skill", scorer="trigger-eval")
+        if (sid2 > sid1 and len(all_res) == 3 and all_res[0]["scorer"] == "lint-eval"
+                and len(filtered) == 2
+                and all(r["scorer"] == "trigger-eval" for r in filtered)
+                and filtered[0]["id"] == sid2 and abs(filtered[0]["score"] - 0.9) < 1e-6
+                and filtered[1]["detail"] == "matched 3/5"):
+            print("OK: v8 scorer_results roundtrip")
+            passed += 1
+        else:
+            print(f"FAIL: scorer_results got sid1={sid1}, sid2={sid2}, all={all_res}, filtered={filtered}")
+            failed += 1
+
+        # 16. v5 skill_performance accessor roundtrip (write path confirmed for v8 callers)
+        upsert_skill_performance("perf-skill", 120.0, True, 800)
+        upsert_skill_performance("perf-skill", 80.0, False, 600)
+        perf = get_skill_performance("perf-skill")
+        if (perf and perf["success_count"] == 1 and perf["error_count"] == 1
+                and abs(perf["error_rate"] - 0.5) < 1e-6 and perf["avg_latency_ms"] > 0):
+            print("OK: v5 skill_performance accessor roundtrip")
+            passed += 1
+        else:
+            print(f"FAIL: skill_performance got {perf}")
+            failed += 1
+
+        # 17. v8 invalid input rejected (bad skill name, empty scorer, bad limit)
+        bad = 0
+        try:
+            set_frontier("BAD NAME WITH SPACES", 1, 0.5)
+        except ValueError:
+            bad += 1
+        try:
+            record_scorer_result("beta-skill", "   ", 0.5)
+        except ValueError:
+            bad += 1
+        try:
+            get_scorer_results("beta-skill", limit=0)
+        except ValueError:
+            bad += 1
+        if bad == 3:
+            print("OK: v8 invalid input rejected")
+            passed += 1
+        else:
+            print(f"FAIL: v8 invalid input not all rejected ({bad}/3)")
+            failed += 1
+
     finally:
         DB_PATH = saved
         try:
@@ -1588,6 +1935,13 @@ def _usage() -> str:
         "  toolforge_db.py delete_shortcut <name>\n"
         "  toolforge_db.py log_sync <integration> <push|pull> [<status>] [<hash>]\n"
         "  toolforge_db.py sync_history [<integration>] [<limit>]\n"
+        "  toolforge_db.py save_skill_version <skill> <skill_md_path> <backup_file> [<proposal>] [<baseline_score>]\n"
+        "  toolforge_db.py get_skill_versions <skill> [<limit>]\n"
+        "  toolforge_db.py set_version_outcome <version_id> <pending|improved|kept|discarded|rolled_back>\n"
+        "  toolforge_db.py get_frontier <skill_name>\n"
+        "  toolforge_db.py set_frontier <skill_name> <generation> <score>\n"
+        "  toolforge_db.py record_scorer <skill_name> <scorer> <score> [<detail>]\n"
+        "  toolforge_db.py get_scorer_results <skill_name> [<scorer>] [<limit>]\n"
         "  toolforge_db.py --self-test\n"
     )
 
@@ -1798,6 +2152,44 @@ def main(argv: list[str]) -> int:
             limit = int(argv[3] if len(argv) > 3 else argv[2]) if len(argv) > 2 else 20
             print(json.dumps(get_sync_history(integration, limit)))
             return 0
+        if cmd == "save_skill_version":
+            # Backup text comes from a file, not argv — full SKILL.md bodies don't
+            # survive shell argument passing (newlines, size, quoting).
+            backup_text = Path(argv[4]).read_text(encoding="utf-8")
+            proposal = argv[5] if len(argv) > 5 else None
+            baseline = float(argv[6]) if len(argv) > 6 else None
+            print(save_skill_version(argv[2], argv[3], backup_text, proposal, baseline))
+            return 0
+        if cmd == "get_skill_versions":
+            limit = int(argv[3]) if len(argv) > 3 else 10
+            print(json.dumps(get_skill_versions(argv[2], limit)))
+            return 0
+        if cmd == "set_version_outcome":
+            set_skill_version_outcome(int(argv[2]), argv[3])
+            print("ok")
+            return 0
+        if cmd == "get_frontier":
+            print(json.dumps(get_frontier(argv[2])))
+            return 0
+        if cmd == "set_frontier":
+            set_frontier(argv[2], int(argv[3]), float(argv[4]))
+            print("ok")
+            return 0
+        if cmd == "record_scorer":
+            detail = argv[5] if len(argv) > 5 else None
+            print(record_scorer_result(argv[2], argv[3], float(argv[4]), detail))
+            return 0
+        if cmd == "get_scorer_results":
+            scorer = argv[3] if len(argv) > 3 and not argv[3].isdigit() else None
+            # limit may sit at argv[3] (scorer omitted) or argv[4] (scorer present)
+            limit_arg = None
+            if len(argv) > 4 and argv[4].isdigit():
+                limit_arg = argv[4]
+            elif len(argv) > 3 and argv[3].isdigit():
+                limit_arg = argv[3]
+            limit = int(limit_arg) if limit_arg is not None else 50
+            print(json.dumps(get_scorer_results(argv[2], scorer, limit)))
+            return 0
         if cmd == "--self-test":
             return _self_test()
     except sqlite3.Error as exc:
@@ -1817,4 +2209,10 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    # Register this instance under the canonical module name BEFORE helpers like
+    # toolforge_catalog.seed_db() run `import toolforge_db`. Without this, that
+    # import creates a SECOND module instance whose DB_PATH is the real path even
+    # while _self_test has swapped this instance's DB_PATH to a temp file — the
+    # seeding connect then leaks an empty zero-table toolforge.db at the real path.
+    sys.modules.setdefault("toolforge_db", sys.modules[__name__])
     sys.exit(main(sys.argv))
